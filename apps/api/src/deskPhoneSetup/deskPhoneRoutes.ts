@@ -37,6 +37,7 @@ import { addEvidence, cloudStateFromRow, evidenceForRow, identityColumns, report
 import { createDeviceProviderRegistry, type DeviceProviderRegistry } from "./deviceProviderRegistry";
 import { registerDeviceCloudRoutes } from "./deviceCloudRoutes";
 import { ensureYealinkRedirect } from "./yealinkRedirectClaim";
+import { registerPhoneRobotRoutes } from "./phoneRobotRoutes";
 
 type JwtUser = { sub: string; tenantId: string; email: string; role: string };
 const getUser = (req: any): JwtUser => req.user as JwtUser;
@@ -2151,6 +2152,15 @@ export async function registerDeskPhoneSetupRoutes(app: FastifyInstance, deps: D
         return xml.includes("<gs_provision") ? xml : null;
       } catch { return null; }
     }),
+  });
+
+  // ⛔ Round 23 (2026-09-17): the office wizard's improviser for a screen the
+  // scripted ladder does not recognise. Same file-split rationale as the device
+  // clouds above — this one lives on its own only because this file is long;
+  // deskPhoneRouteOrder.test.ts holds it to the same ownership-first rule.
+  registerPhoneRobotRoutes(app, {
+    deps, db, ownRun, allowedToSetUp,
+    provisioningUrlFor: deps.provisioningUrlFor ?? defaultProvisioningUrlFor,
   });
 }
 

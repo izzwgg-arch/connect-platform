@@ -13,6 +13,7 @@
  * boundary in either direction and cannot be read out of an IPC message.
  */
 
+import { randomUUID } from "node:crypto";
 import { createPhoneCapability, type OperationRequest, type OperationResult } from "./capability";
 import { createPnpResident, type PnpResident } from "./pnpResident";
 import type { HttpRequest, HttpResponse, YealinkCredentials } from "./yealink";
@@ -74,6 +75,15 @@ export function registerPhoneSetup(deps: WiringDeps): { forgetAll: () => void; d
     resolveCredential: async (ref) => get(ref),
     pnpResident,
     log: deps.log,
+    // ⛔ round 23, 2026-09-17: `web_provision` mints its own password when a phone
+    // forces a change mid-flow. It never sees this vault — it hands back a
+    // reference, exactly like `phoneSetup:store-credential` does for a password the
+    // CUSTOMER typed, so both paths end up in the same place under the same rules.
+    storeCredential: async (creds) => {
+      const ref = `web-${randomUUID()}`;
+      put(ref, creds);
+      return ref;
+    },
   });
 
   deps.ipcMain.handle(PHONE_SETUP_CHANNEL, async (_e: unknown, req: OperationRequest): Promise<OperationResult> => {

@@ -12,8 +12,9 @@ import {
   createSetupDriver, MAX_CANNOT_LISTEN_ATTEMPTS, classifyResetAnswer,
   HINT_RESET_SENT, HINT_RESET_SKIPPED, HINT_APP_TOO_OLD,
   HINT_CLEARING, HINT_CONNECTED,
-  HINT_RESTARTING, HINT_NEEDS_SERIAL, HINT_CANNOT_LISTEN,
+  HINT_RESTARTING, HINT_NEEDS_SERIAL, HINT_CANNOT_LISTEN, HINT_POWER_CYCLE, HINT_LOCKED,
   CLOUD_ASK_INTERVAL_MS, CLOUD_RESTART_WAIT_MS, PROVISIONING_REBOOT_ATTEMPTS,
+  HINT_WEB_HANDED_OFF, WEB_PROVISION_INTERVAL_MS, WEB_PROVISION_MAX_ATTEMPTS,
 } from "./setupDriver";
 
 type Call = { method: string; path: string; body?: any };
@@ -385,8 +386,11 @@ test("set_provisioning: two restarts from here, then listen-and-check FOREVER �
   const hints: string[] = [];
   // Four hours of the wizard's 4-second tick. The OLD driver gave up after one.
   for (let i = 0; i < 3_600; i += 1) { hints.push((await d.tick()).hints.p1); t += 4000; }
-  assert.deepEqual(bridge.ops.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-and-check");
-  assert.ok(bridge.ops.slice(2).every((o) => o.reboot === false), "no third restart, ever");
+  // ⛔ Round 23 (2026-09-17) also tries the phone's own web login when PnP does not
+  // deliver, interleaved with these — filter to the PnP calls this assertion is about.
+  const pnpOps = bridge.ops.filter((o: any) => o.op === "set_provisioning");
+  assert.deepEqual(pnpOps.slice(0, 5).map((o) => o.reboot), [true, true, false, false, false], "two restarts from here, then listen-and-check");
+  assert.ok(pnpOps.slice(2).every((o) => o.reboot === false), "no third restart, ever");
   assert.match(hints[0], /restarting/);
   assert.match(hints[2], /Plug this phone in/);
   assert.match(hints[2], /keeps listening/);
@@ -825,4 +829,184 @@ test("a Grandstream with no cloud is cleared over the LAN with the customer's pa
   assert.equal(wipe.vendor, "grandstream", "the desktop is told the brand so it uses the Grandstream reset");
   assert.equal(resetReports(api).length, 1);
   assert.equal(out.hints.p1, HINT_RESET_SENT);
+});
+
+/* ── round 23 (2026-09-17): the phone's own web page — a SECOND mechanism ───── */
+
+test("round 23: a Yealink refused as locked but with webLoginMayWork tries the phone's own web login before the password screen", async () => {
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "fingerprint") return { ok: true, fingerprint: { vendor: "yealink", model: "T42S" } };
+      if (req.op === "factory_reset") return { ok: false, refused: "locked", webLoginMayWork: true };
+      if (req.op === "web_probe") return { ok: true, family: "yealink_v86", loginWorked: true };
+      if (req.op === "web_reset") return { ok: true, sent: true };
+      return { ok: true, op: req.op };
+    },
+  };
+  const out = await createSetupDriver("r1", api, bridge as any).tick();
+  assert.ok(bridge.ops.some((o: any) => o.op === "web_probe"), "the web login is tried before surfacing the password screen");
+  assert.ok(bridge.ops.some((o: any) => o.op === "web_reset"));
+  assert.equal(resetReports(api).length, 1, "a web reset is reported through the exact same door as a LAN reset");
+  assert.equal(out.hints.p1, HINT_RESET_SENT);
+  assert.equal(out.needs.length, 0, "the phone was never actually locked, so nobody is asked for a password");
+});
+
+test("round 23: when the web login genuinely fails, today's password path is unchanged", async () => {
+  const api = fakeApi([phone("p1")], { p1: RESET_DECISION });
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "fingerprint") return { ok: true, fingerprint: { vendor: "yealink", model: "T42S" } };
+      if (req.op === "factory_reset") return { ok: false, refused: "locked", webLoginMayWork: true };
+      if (req.op === "web_probe") return { ok: true, family: "yealink_v86", loginWorked: false };
+      return { ok: true, op: req.op };
+    },
+  };
+  const api2 = api;
+  const out = await createSetupDriver("r1", api2, bridge as any).tick();
+  assert.ok(!bridge.ops.some((o: any) => o.op === "web_reset"), "a web login that failed is never followed by a reset attempt");
+  assert.equal(resetReports(api2).length, 0);
+  assert.equal(out.hints.p1, HINT_LOCKED);
+});
+
+test("round 23: PnP not delivered on a Yealink signs into the phone's own web page and reports the folder the same way a scan would", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning", provisioningUrl: FOLDER } });
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "set_provisioning") return { ok: true, delivered: false };
+      if (req.op === "web_provision") return { ok: true, provisioned: true, urlVerified: true };
+      return { ok: true, op: req.op };
+    },
+  };
+  const out = await createSetupDriver("r1", api, bridge as any).tick();
+  const wp = bridge.ops.find((o: any) => o.op === "web_provision");
+  assert.ok(wp, JSON.stringify(bridge.ops));
+  assert.equal(wp.url, FOLDER);
+  assert.equal(wp.mac, "805e0c4d796d");
+  assert.equal(wp.setPassword, true);
+  const discovered = api.calls.filter((c: any) => c.path.endsWith("/discovered"));
+  assert.equal(discovered.length, 1, "the same /discovered door a scan uses");
+  assert.deepEqual(discovered[0].body, { phones: [{ mac: "805e0c4d796d", ip: "192.168.1.20", provisioningUrl: FOLDER }] });
+  assert.equal(out.hints.p1, HINT_WEB_HANDED_OFF);
+  assert.ok(out.performed.some((p: any) => p.action === "web_provision"));
+});
+
+test("round 23: the web login is paced like a restart — at most once per 60s, at most 5 times ever, for this phone", async () => {
+  let clock = 1_000_000;
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning", provisioningUrl: FOLDER } });
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "set_provisioning") return { ok: true, delivered: false };
+      if (req.op === "web_provision") return { ok: false, refused: "login_failed" };
+      return { ok: true, op: req.op };
+    },
+  };
+  const d = createSetupDriver("r1", api, bridge as any, () => clock);
+  await d.tick();
+  assert.equal(bridge.ops.filter((o: any) => o.op === "web_provision").length, 1);
+  clock += 4_000;
+  await d.tick();
+  assert.equal(bridge.ops.filter((o: any) => o.op === "web_provision").length, 1, "not tried again inside 60s");
+  for (let i = 0; i < 8; i += 1) { clock += WEB_PROVISION_INTERVAL_MS; await d.tick(); }
+  assert.equal(bridge.ops.filter((o: any) => o.op === "web_provision").length, WEB_PROVISION_MAX_ATTEMPTS, "bounded at 5, ever");
+});
+
+test("round 23: an unrecognised screen goes to the improviser, which acts through web_act and finishes with 'done'", async () => {
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning", provisioningUrl: FOLDER } });
+  const adviseCalls: any[] = [];
+  const post = api.post;
+  (api as any).post = async (path: string, body?: any) => {
+    if (path.endsWith("/robot-advise")) {
+      adviseCalls.push(body);
+      if (adviseCalls.length === 1) {
+        return { ok: true, verdict: "actions", actions: [{ kind: "click", ref: "ref_1" }], customerHint: "Pointing it at Loopcom…" };
+      }
+      return { ok: true, verdict: "done", customerHint: "We signed into the phone and pointed it at Loopcom." };
+    }
+    return post(path, body);
+  };
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "set_provisioning") return { ok: true, delivered: false };
+      if (req.op === "web_provision") return { ok: false, refused: "unknown_screen", snapshot: { text: "???" } };
+      if (req.op === "web_act") return { ok: true, snapshot: { text: "still on some page" } };
+      return { ok: true, op: req.op };
+    },
+  };
+  const out = await createSetupDriver("r1", api, bridge as any).tick();
+  assert.equal(adviseCalls.length, 2, "one advise call per round, in the same tick");
+  assert.equal(adviseCalls[0].goal, "provision");
+  assert.ok(bridge.ops.some((o: any) => o.op === "web_act" && Array.isArray(o.actions) && o.actions[0]?.kind === "click"),
+    "the improviser only ever performs actions the server handed back");
+  assert.ok(bridge.ops.filter((o: any) => o.op === "web_act").every((o: any) => o.allowedUrl === FOLDER),
+    "every improviser web_act carries the ONE folder the desktop fence may allow (round-23 hardening)");
+  const discovered = api.calls.filter((c: any) => c.path.endsWith("/discovered"));
+  assert.equal(discovered.length, 1, "'done' for a provision goal reports the folder the same way a scan would");
+  assert.ok(out.performed.some((p: any) => p.action === "robot_provision"));
+});
+
+test("round 23: after the improviser's cycle budget is spent, the phone falls back to today's behaviour exactly as if it did not exist", async () => {
+  let clock = 2_000_000;
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning", provisioningUrl: FOLDER } });
+  let adviseCount = 0;
+  const post = api.post;
+  (api as any).post = async (path: string, body?: any) => {
+    if (path.endsWith("/robot-advise")) { adviseCount += 1; return { ok: true, verdict: "give_up", customerHint: "x" }; }
+    return post(path, body);
+  };
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "set_provisioning") return { ok: true, delivered: false };
+      if (req.op === "web_provision") return { ok: false, refused: "unknown_screen", snapshot: { text: "???" } };
+      return { ok: true, op: req.op };
+    },
+  };
+  const d = createSetupDriver("r1", api, bridge as any, () => clock);
+  for (let i = 0; i < 3; i += 1) { await d.tick(); clock += WEB_PROVISION_INTERVAL_MS; }
+  assert.equal(adviseCount, 3, "one advise round per cycle, each ending in give_up on its first round");
+  const fourth = await d.tick();
+  assert.equal(adviseCount, 3, "the 4th cycle is refused before the model is ever asked again");
+  assert.equal(fourth.hints.p1, HINT_POWER_CYCLE, "today's pre-robot behaviour took back over");
+});
+
+test("round 23: 'Try again' clears the robot's pacing and cycle memory too — a fresh go is a fresh go", async () => {
+  let clock = 3_000_000;
+  const api = fakeApi([phone("p1", { mac: "805e0c4d796d" })], { p1: { action: "set_provisioning", provisioningUrl: FOLDER } });
+  let adviseCount = 0;
+  const post = api.post;
+  (api as any).post = async (path: string, body?: any) => {
+    if (path.endsWith("/robot-advise")) { adviseCount += 1; return { ok: true, verdict: "give_up", customerHint: "x" }; }
+    return post(path, body);
+  };
+  const bridge = {
+    ops: [] as any[],
+    run: async (req: any) => {
+      bridge.ops.push(req);
+      if (req.op === "set_provisioning") return { ok: true, delivered: false };
+      if (req.op === "web_provision") return { ok: false, refused: "unknown_screen", snapshot: { text: "???" } };
+      return { ok: true, op: req.op };
+    },
+  };
+  const d = createSetupDriver("r1", api, bridge as any, () => clock);
+  for (let i = 0; i < 3; i += 1) { await d.tick(); clock += WEB_PROVISION_INTERVAL_MS; }
+  assert.equal(adviseCount, 3);
+  await d.tick();
+  assert.equal(adviseCount, 3, "cycle budget spent before the retry");
+
+  d.retried("p1");
+  clock += WEB_PROVISION_INTERVAL_MS;
+  await d.tick();
+  assert.equal(adviseCount, 4, "retried() reset the improviser's cycle budget, not only the lock/password memory");
 });

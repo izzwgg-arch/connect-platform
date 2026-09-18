@@ -24,6 +24,11 @@ import { sendGrandstreamOperation, testGrandstreamCredentials } from "./grandstr
 import { normalizeMac } from "./pnp";
 import { decideLocalFactoryReset } from "./resetSafetyCore";
 import { createPnpResident, PNP_RESIDENT_MAX_MACS, type PnpResident } from "./pnpResident";
+import {
+  runWebProbe, runWebProvision, runWebReset, runWebAct,
+  type RobotBrowser, type RobotActionInput, type RobotSnapshot, type StoreCredential,
+  type WebProbeResult, type WebProvisionResult, type WebResetResult, type WebActResult,
+} from "./phoneWebRobot";
 
 /** Every operation that exists. Adding one is a deliberate act with its own test. */
 export const PHONE_OPERATIONS = [
@@ -55,6 +60,22 @@ export const PHONE_OPERATIONS = [
    * durable record on top of all four.
    */
   "factory_reset",
+  /**
+   * 2026-09-17, round 23 (Izzy: "a robot and a browser hidden inside the wizard...
+   * The only thing the customer will have to do is factory reset the phones").
+   *
+   * ⛔⛔ A GENERIC ACTION-URI/SESSION VERB CANNOT EXPRESS THIS. Some phones need a
+   * REAL page: the login POST is encrypted by the page's own JavaScript, a forced
+   * password change can appear mid-flow, and the reset control is a button inside
+   * a page with no documented URL of its own. `phoneWebRobot.ts` is the fence
+   * around a real (caged, injectable) browser doing exactly that and nothing
+   * else — see its header for the full fence list. These four ops are the whole
+   * surface; there is no "run this script" op and there never will be.
+   */
+  "web_probe",
+  "web_provision",
+  "web_reset",
+  "web_act",
 ] as const;
 
 export type PhoneOperation = (typeof PHONE_OPERATIONS)[number];
@@ -91,7 +112,15 @@ export type OperationRequest =
       waitMs?: number;
       /** Which brand's restart surface to use for the restart half. */
       vendor?: string | null;
-    };
+    }
+  | { op: "web_probe"; ip: string; credentialRef?: string | null }
+  | {
+      op: "web_provision"; ip: string; mac: string; url: string; credentialRef?: string | null;
+      /** Mint and remember a new password if the phone forces a change mid-flow. */
+      setPassword?: boolean;
+    }
+  | { op: "web_reset"; ip: string; credentialRef?: string | null }
+  | { op: "web_act"; ip: string; actions: RobotActionInput[]; credentialRef?: string | null; allowedUrl?: string | null };
 
 export type OperationResult =
   | { ok: true; op: "discover"; scan: ScanResult }
@@ -119,7 +148,17 @@ export type OperationResult =
    * folder, which the resident listener records separately.
    */
   | { ok: true; op: "factory_reset"; sent: true }
-  | { ok: false; refused: string };
+  | WebProbeResult
+  | WebProvisionResult
+  | WebResetResult
+  | WebActResult
+  /**
+   * ⛔ `snapshot` is optional and shared by every web-robot refusal (never by an
+   * older op) — see phoneWebRobot.ts's sanitized-snapshot contract. `webLoginMayWork`
+   * is the round-23 hint on a Yealink LAN-lockout: see the comment on `factory_reset`
+   * below for why an action-URI 401 is not proof that the web login will also fail.
+   */
+  | { ok: false; refused: string; snapshot?: RobotSnapshot; webLoginMayWork?: true };
 
 /**
  * ⛔⛔ CREDENTIALS ARE NEVER PASSED IN. The caller hands over a REFERENCE — a name
@@ -141,6 +180,21 @@ export type CapabilityDeps = {
   sipProbe?: (ip: string) => Promise<SipProbeResult>;
   /** The standing PnP responder, injectable for tests. */
   pnpResident?: PnpResident;
+  /**
+   * The real (caged) browser the four `web_*` ops drive. Injectable for tests —
+   * production gets a lazily-constructed `playwrightRobotBrowser.ts` instance, so a
+   * test that never touches a `web_*` op never causes `playwright-core` to load.
+   */
+  robotBrowser?: RobotBrowser;
+  /**
+   * Mint a new vault entry for a password `web_provision` generated on a forced
+   * password change, and hand back its reference. ⛔ The value itself is NEVER
+   * returned to the caller — only the reference `web_provision`'s
+   * `credentialRefCreated` names. Optional so every existing caller and test is
+   * unchanged; a `web_provision` that needs it without it configured refuses
+   * loudly rather than silently discarding the new password.
+   */
+  storeCredential?: StoreCredential;
   /**
    * Where to say what an operation did. Optional so every existing caller and test
    * is unchanged; when absent nothing is written.
@@ -220,6 +274,10 @@ export function describeRequest(req: OperationRequest): string {
   if (Array.isArray(macs)) bits.push(`macs=${macs.length}`);
   const subnet = (req as any).subnet;
   if (typeof subnet === "string" && subnet) bits.push(`subnet=${subnet}`);
+  // ⛔ web_act's action list: a COUNT only, never the paths/text/refs it carries —
+  // those are exactly the things the sanitized-snapshot contract keeps out of a log.
+  const actions = (req as any).actions;
+  if (Array.isArray(actions)) bits.push(`actions=${actions.length}`);
   // ⛔ A wipe has to be traceable to the approval a person gave. The id is a record
   // reference, not a secret, and it is the one thing that ties this machine's action
   // back to the server's audit row — so it goes in the line, always.
@@ -248,6 +306,14 @@ export function describeResult(res: OperationResult): string {
       return `ok listening=${res.listening} macs=${res.macs} deliveries=${res.deliveries}`;
     case "factory_reset":
       return "ok reset sent";
+    case "web_probe":
+      return `ok family=${res.family} loginWorked=${res.loginWorked} usedDefault=${res.usedDefault}`;
+    case "web_provision":
+      return `ok provisioned=${res.provisioned} urlVerified=${res.urlVerified}${res.credentialRefCreated ? " credentialRefCreated=yes" : ""}`;
+    case "web_reset":
+      return "ok reset sent (web)";
+    case "web_act":
+      return `ok actions=${res.outcomes.length}`;
     default:
       return "ok";
   }
@@ -258,11 +324,34 @@ function isGrandstream(vendor: unknown): boolean {
   return String(vendor ?? "").trim().toLowerCase() === "grandstream";
 }
 
+/**
+ * ⛔ Lazily required, and required exactly once. `playwrightRobotBrowser.ts` does
+ * `require("playwright-core")` at module load, and NOTHING in this file may cause
+ * that to happen just because `capability.ts` was imported — every existing test in
+ * this directory constructs a capability with no `robotBrowser` and must keep
+ * working even if Playwright were entirely absent from the machine. The `require`
+ * only runs the first time a `web_*` op is actually dispatched.
+ */
+let lazyDefaultRobotBrowser: RobotBrowser | null = null;
+function defaultRobotBrowser(): RobotBrowser {
+  if (!lazyDefaultRobotBrowser) {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createPlaywrightRobotBrowser } = require("./playwrightRobotBrowser") as typeof import("./playwrightRobotBrowser");
+    lazyDefaultRobotBrowser = createPlaywrightRobotBrowser();
+  }
+  return lazyDefaultRobotBrowser;
+}
+
 export function createPhoneCapability(deps: CapabilityDeps) {
   const resident: PnpResident = deps.pnpResident ?? createPnpResident({ log: deps.log });
   const now = deps.now ?? (() => Date.now());
   const gate: Gate = { lastActionAt: new Map(), actionTimes: [], lastScanAt: 0, resetsSent: new Set(), loginFailures: new Map() };
   const log = deps.log ?? (() => {});
+  // ⛔ Wrapped rather than resolved eagerly, so `defaultRobotBrowser()` (and its
+  // `require`) only runs on the first actual call, never at capability construction.
+  const robotBrowser: RobotBrowser = deps.robotBrowser ?? { openPage: (ip) => defaultRobotBrowser().openPage(ip) };
+  const storeCredential: StoreCredential = deps.storeCredential
+    ?? (async () => { throw new Error("storeCredential not configured"); });
 
   /** Has this phone already refused us too many times to keep trying? */
   const loginBlocked = (ip: string) => (gate.loginFailures.get(ip) ?? 0) >= MAX_LOGIN_FAILURES_PER_PHONE;
@@ -273,6 +362,26 @@ export function createPhoneCapability(deps: CapabilityDeps) {
   const noteLogin = (ip: string, outcome: { ok: boolean; reason?: string }) => {
     if (outcome.ok) { gate.loginFailures.delete(ip); return; }
     if (outcome.reason === "locked") gate.loginFailures.set(ip, (gate.loginFailures.get(ip) ?? 0) + 1);
+  };
+
+  // ⛔ The four `web_*` ops share the SAME lockout gate and credential vault as
+  // every other login this app makes — a wrong web password is exactly as
+  // expensive to a customer's phone as a wrong Action-URI password.
+  //
+  // ⛔⛔ `webActSessions` is created ONCE here, for the LIFE of this capability
+  // instance — a `web_act` page has to outlive the single call that opened it (see
+  // phoneWebRobot.ts's `WebActSession`), and this is the one place both this
+  // capability's calls and every test's fresh instance naturally share exactly one
+  // store, never leaking into another capability/test's.
+  const robotDeps = {
+    browser: robotBrowser,
+    resolveCredential: deps.resolveCredential,
+    loginBlocked,
+    noteLogin,
+    storeCredential,
+    now,
+    log,
+    webActSessions: new Map(),
   };
 
   /**
@@ -346,7 +455,11 @@ export function createPhoneCapability(deps: CapabilityDeps) {
     // set_provisioning only changes the phone when it is asked to restart it; a
     // listen-and-check call is a read and rides the wizard's 4-second tick.
     const mutating = req.op === "reboot" || req.op === "trigger_autop" || req.op === "factory_reset"
-      || (req.op === "set_provisioning" && (req as any).reboot !== false);
+      || (req.op === "set_provisioning" && (req as any).reboot !== false)
+      // ⛔ web_probe is a read (a login to LOOK, never to change anything); the
+      // other three change the phone's settings, trigger a re-provision or wipe it,
+      // so they wait out the same per-phone spacing as every other write.
+      || req.op === "web_provision" || req.op === "web_reset" || req.op === "web_act";
     if (mutating && t - last < MIN_MS_BETWEEN_ACTIONS_PER_PHONE) {
       return { ok: false, refused: "too_soon_for_this_phone" };
     }
@@ -484,7 +597,20 @@ export function createPhoneCapability(deps: CapabilityDeps) {
         // ⛔⛔ A 401/403 is the phone REFUSING our password: nothing was wiped. Until
         // 2026-09-14 this still recorded a reset, so a locked phone lost its one reset
         // untouched and the password step that could unlock it never ran.
-        if (!r.ok && r.reason === "locked") return { ok: false, refused: "locked" };
+        //
+        // ⛔⛔ ROUND 23, 2026-09-17: THE MAPPING IS HONEST BUT A DRIVER CAN MISREAD IT.
+        // A Yealink Action-URI 401 on a FACTORY phone is that firmware's untrusted-IP
+        // default, not proof the phone is password-locked — proven live the same night:
+        // Izzy's factory-reset T42S answered `key=Reset` with 401 over the Action URI,
+        // then accepted admin/admin over its own WEB page seconds later. So this refusal
+        // stays `locked` (it is still true that nothing was wiped), and carries a hint
+        // for Yealink only — Grandstream has no documented default, so a locked
+        // Grandstream really is a dead end until the customer supplies a password.
+        if (!r.ok && r.reason === "locked") {
+          return isGrandstream((req as any).vendor)
+            ? { ok: false, refused: "locked" }
+            : { ok: false, refused: "locked", webLoginMayWork: true };
+        }
         // ⛔ Otherwise the phone is recorded as reset whether or not the reply arrived. A wipe
         // that "timed out" was very likely received — the phone stops answering
         // BECAUSE it is doing what it was told — so treating a timeout as "did not
@@ -532,6 +658,28 @@ export function createPhoneCapability(deps: CapabilityDeps) {
           delivered: Boolean(d), acknowledged: Boolean(d?.acknowledged), deliveredAt: d ? d.at : null,
         };
       }
+      // ⛔⛔ THE FOUR WEB-ROBOT OPS. Each is a thin dispatch into phoneWebRobot.ts,
+      // which re-derives its OWN fences (address, URL, budget) rather than trusting
+      // that this switch was the only door — see that file's header. `ip` is passed
+      // through pre-fenced (checked above, at line ~441) but phoneWebRobot checks it
+      // again anyway, on purpose.
+      case "web_probe":
+        return runWebProbe(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null });
+      case "web_provision":
+        return runWebProvision(robotDeps, {
+          ip, mac: (req as any).mac, url: (req as any).url,
+          credentialRef: (req as any).credentialRef ?? null,
+          setPassword: Boolean((req as any).setPassword),
+        });
+      case "web_reset":
+        return runWebReset(robotDeps, { ip, credentialRef: (req as any).credentialRef ?? null });
+      case "web_act":
+        return runWebAct(robotDeps, {
+          ip, actions: Array.isArray((req as any).actions) ? (req as any).actions : [],
+          credentialRef: (req as any).credentialRef ?? null,
+          // ⛔ The fence's allow-list has exactly one entry, and it rides the op.
+          allowedUrl: typeof (req as any).allowedUrl === "string" ? (req as any).allowedUrl : null,
+        });
       default:
         return { ok: false, refused: "unknown_operation" };
     }

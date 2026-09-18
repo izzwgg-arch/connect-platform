@@ -1,5 +1,16 @@
 # Tests run
 
+## Desk-phone wizard round 23 — the hidden robot + OpenAI brain + auto RPS release — 2026-09-17 (night)
+
+- LIVE PROOF: a Playwright headless-Chrome prototype logged into the factory T42S (192.168.6.170, admin/admin), wrote the Landau `/phoneprov/a70274ea0f143ca0/` folder into AutoProvisionServerURL, triggered autoprovision; PBX nginx logged `805ec0b3b2d0.boot`+`.cfg` 200 (UA `Yealink SIP-T42S`) and the mirror shows **T21_101 REGISTERED** — 65 s, no human step after the reset.
+- desktop `node --import tsx --test src/phoneSetup/*.test.ts` **214/214** (46 new phoneWebRobot + fence-hardening; baseline was 167). tsc 0.
+- api `phoneRobotRoutes.test.ts` + `yealinkMacRemoval.test.ts` + `deviceCloudRoutes.test.ts` + `deskPhoneRouteOrder.test.ts` + `yealinkRedirectClaim.test.ts` **140/140**; api tsc 0 in every touched file.
+- portal `setupDriver.test.ts` **53/53** (7 new round-23 + fence-allowedUrl guard); portal tsc 0.
+- agent `phoneRobotAdvisor.test.ts` **9/9**; router `phone_web_robot` task added; agent tsc: the `unref` errors in server.ts are pre-existing (14 in origin, unchanged), none in touched files.
+- Fence hardening replayed: a bare hostname (no scheme) and any fill into a server/URL-named field are refused in BOTH the desktop op and the `/robot-advise` endpoint (tests in each).
+- DEPLOYED: see the desk-phone summary file after container verification.
+- NOT proven: the wizard (not the prototype) end to end; playwrightRobotBrowser against a real handset; the improviser on a real unknown screen; a real Yealink MAC-removal filing.
+
 ## Desk-phone wizard round 22b — Try again forgets the lock; conflict note never clobbers a halt — 2026-09-17 (evening)
 
 - apps/api `yealinkRedirectClaim.test.ts` + `deviceCloudRoutes.test.ts` + `deskPhoneRoutes.test.ts` **154/154** (+2: a halted row's note is never overwritten; somebody else's note is never overwritten).

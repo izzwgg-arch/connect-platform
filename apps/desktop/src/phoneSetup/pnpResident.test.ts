@@ -63,6 +63,25 @@ class FakeSocket extends EventEmitter implements PnpSocket {
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 
+/**
+ * ⛔ Poll rather than a fixed sleep, for the ONE assertion in this file that
+ * cares about wall-clock ordering across several `setImmediate` hops (socket
+ * bind, then an HTTP send). A fixed `tick()` of a few milliseconds is a bet on
+ * how fast THIS process happens to be right now — proven wrong on 2026-09-17
+ * when the round-23 phone-web-robot addition made `capability.ts` bigger and a
+ * cold-started single-test run needed more than 5ms to reach the same point,
+ * even though the actual behaviour (bind before send) was unchanged. Polling
+ * tests the real invariant instead of a guessed duration.
+ */
+const waitFor = async (condition: () => boolean, timeoutMs = 2000): Promise<boolean> => {
+  const start = Date.now();
+  while (!condition()) {
+    if (Date.now() - start > timeoutMs) return false;
+    await new Promise((r) => setTimeout(r, 1));
+  }
+  return true;
+};
+
 function make(opts: { failBind?: boolean; now?: () => number } = {}) {
   const sockets: FakeSocket[] = [];
   let t = 1_000_000;
@@ -219,12 +238,16 @@ function cap(opts: { http?: (req: HttpRequest) => Promise<HttpResponse>; failBin
   return { api, seen, resident, sockets };
 }
 
-test("the allowlist has nine operations: the six, arm_pnp/disarm_pnp, and factory_reset", () => {
-  // ⛔ `factory_reset` joined on 2026-09-11 (Izzy's mandate). Its four fences live in
-  // capability.ts and are pinned by phoneSetup.test.ts; this list is here so a TENTH
-  // operation can never appear without somebody changing a test on purpose.
-  assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
+test("the allowlist has thirteen operations: the six, arm_pnp/disarm_pnp, factory_reset, and the four web-robot ops", () => {
+  // ⛔ `factory_reset` joined on 2026-09-11 (Izzy's mandate); its four fences live in
+  // capability.ts and are pinned by phoneSetup.test.ts. `web_probe`/`web_provision`/
+  // `web_reset`/`web_act` joined 2026-09-17 (round 23); their fences live in
+  // phoneWebRobot.ts and are pinned by phoneWebRobot.test.ts. This list is here so a
+  // FOURTEENTH operation can never appear without somebody changing a test on purpose.
+  assert.deepEqual([...PHONE_OPERATIONS].sort(), [
+    "arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning",
+    "test_credentials", "trigger_autop", "web_act", "web_probe", "web_provision", "web_reset",
+  ]);
 });
 
 test("arm_pnp arms the resident for the customer's folder and phones; the fence applies; the list is capped", async () => {
@@ -246,11 +269,13 @@ test("arm_pnp arms the resident for the customer's folder and phones; the fence 
 test("set_provisioning arms the resident for the phone FIRST, then asks it to restart, then reports", async () => {
   const { api, seen, sockets } = cap();
   const p = api.run({ op: "set_provisioning", ip: PHONE_IP, mac: MAC, url: URL_OK, waitMs: 400 });
-  await tick();
-  // ⛔ THE PROPERTY IS THE ORDER, not the number of sockets. PnP fires once per
-  // boot, so a responder that starts after the restart misses a fast phone. What
-  // must be true here is that the listening socket EXISTS and is bound before the
-  // reboot request goes out — which is what the two lines below say together.
+  // ⛔ THE PROPERTY IS THE ORDER, not the number of sockets, and not how long it
+  // took to get there. PnP fires once per boot, so a responder that starts after
+  // the restart misses a fast phone — what must be true is that the listening
+  // socket exists and is bound BEFORE the reboot request goes out. Polling for the
+  // request (see `waitFor`) rather than guessing a fixed delay means this checks
+  // that fact even when the whole chain runs slower than some fixed number of ms.
+  assert.ok(await waitFor(() => seen.length > 0), "the reboot request never went out");
   assert.ok(sockets.length >= 1 && sockets[0].bound, "the listener is up before the restart is sent");
   assert.equal(sockets[0].boundPort, PNP_PRIMARY_PORT);
   assert.match(seen[0].url, /^http:\/\/192\.168\.0\.121\/servlet\?key=Reboot$/);

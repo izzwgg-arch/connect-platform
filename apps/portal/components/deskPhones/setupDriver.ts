@@ -121,6 +121,23 @@ type PhoneMemo = {
    * that goes empty while work is genuinely under way reads as the wizard having stopped.
    */
   lastHint: string | null;
+  /**
+   * ⛔⛔ ROUND 23 (2026-09-17, Izzy: "a robot and a browser hidden inside the wizard").
+   * The office machine's OWN LAN attempts (PnP, the action-URI reset) stay the fast,
+   * cheap first door for a Yealink; when they do not land this is when a SECOND
+   * mechanism — signing into the phone's own web page — is tried. Paced like every
+   * other restart-adjacent step, because it is a write to somebody's phone.
+   */
+  webProvisionAt: number | null;
+  /** Bounded like every restart: five attempts, ever, for this phone (until a retry). */
+  webProvisionAttempts: number;
+  /**
+   * How many times this phone has been handed to the improviser (the model that reads
+   * whatever is actually on the phone's screen) THIS setup. ⛔ Bounded at
+   * `MAX_IMPROVISE_CYCLES` — after that, today's pre-robot behaviour (wait, or the
+   * honest password/hands-on path) takes back over exactly as if this never existed.
+   */
+  improviseCycles: number;
 };
 
 const TERMINAL = new Set(["REGISTERED", "NEEDS_ATTENTION", "FAILED"]);
@@ -163,6 +180,18 @@ export const MAX_CANNOT_LISTEN_ATTEMPTS = 3;
 export const CLOUD_ASK_INTERVAL_MS = 30_000;
 /** A restart the maker's cloud accepted is given this long to bring the phone back before another. */
 export const CLOUD_RESTART_WAIT_MS = 180_000;
+/**
+ * ⛔⛔ ROUND 23 (2026-09-17) — THE PHONE'S OWN WEB PAGE, THE SECOND MECHANISM.
+ * A write to a phone through its web login is paced exactly like a restart: at most
+ * once per phone per this interval, and never more than `WEB_PROVISION_MAX_ATTEMPTS`
+ * times in one setup (a `retry` resets both — see `retried()`).
+ */
+export const WEB_PROVISION_INTERVAL_MS = 60_000;
+export const WEB_PROVISION_MAX_ATTEMPTS = 5;
+/** How many advise→act rounds the improviser gets in the tick-cycle it was raised in. */
+export const MAX_IMPROVISE_ROUNDS_PER_TICK = 8;
+/** How many separate tick-cycles a phone may be handed to the improviser, ever, this setup. */
+export const MAX_IMPROVISE_CYCLES = 3;
 
 export const HINT_HANDED_OFF =
   "Told this phone where Loopcom is. It is fetching its settings and will restart on its own.";
@@ -190,6 +219,16 @@ export const HINT_LOCKED =
 export const HINT_CLOUD_CLEARING = "Asking the phone maker’s cloud to clear this phone…";
 export const HINT_CLOUD_RESTART = "Asking the phone maker’s cloud to restart this phone so it picks up its settings…";
 export const HINT_NEEDS_SERIAL = "Waiting for this phone’s serial number.";
+/*
+  ⛔⛔ ROUND 23 (2026-09-17) — THE PHONE'S OWN WEB PAGE, SAID IN PLAIN ENGLISH. Never
+  "AI", "agent", "robot" or "OpenAI" — a customer's row says what Loopcom is doing to
+  their phone, exactly like every hint above it.
+*/
+export const HINT_WEB_SIGNING_IN = "Signing into the phone…";
+export const HINT_WEB_PROVISIONING = "Pointing it at Loopcom…";
+export const HINT_WEB_VERIFYING = "Checking the save landed…";
+export const HINT_WEB_HANDED_OFF = "We signed into the phone and pointed it at Loopcom.";
+export const HINT_ROBOT_THINKING = "Working out what to do next on this phone’s screen…";
 
 /*
   ⛔⛔ EVERY STEP IS SAID BEFORE IT IS DONE (Izzy, 2026-09-14: "everything the wizard is doing,
@@ -260,6 +299,7 @@ export function createSetupDriver(
         cloudAskedAt: null, cloudRestarts: 0, cloudRestartAt: null, cloudUnavailable: false,
         awaitingSerial: false, serialMessage: null,
         lastHint: null,
+        webProvisionAt: null, webProvisionAttempts: 0, improviseCycles: 0,
       };
       memos.set(id, m);
     }
@@ -404,6 +444,116 @@ export function createSetupDriver(
       if (manual.code !== "reset_authorization_required") m.cloudUnavailable = true;
     }
     markStall(m, `cloud_${purpose}`);
+  }
+
+  /**
+   * ⛔⛔ THIS IS WHERE A LAN-OR-WEB WIPE IS REPORTED, AND ONLY HERE. Factored out of
+   * the LAN reset branch so the web-login leg (round 23) reports through the exact
+   * same door — the server counts a reset from `/reset-sent`, never from which
+   * mechanism sent it. Retried a little: if every report is lost, the next tick's
+   * advance asks again, the phone answers `already_reset_this_session`, and the
+   * report goes out then — never a second wipe.
+   */
+  async function reportResetSent(phoneId: string, authorizationId: string): Promise<void> {
+    for (let i = 0; i < 3; i += 1) {
+      const ack = await api.post<any>(`/desk-phones/runs/${runId}/phones/${phoneId}/reset-sent`, { authorizationId })
+        .catch(() => null);
+      if (ack?.ok) break;
+    }
+  }
+
+  /**
+   * A web op reported a screen the scripted ladder does not recognise. `web_probe`
+   * says so with `family: "unknown"`; every other web op says so with
+   * `refused: "unknown_screen"`. Either shape is the same fact: nothing here knows
+   * what to do next, and it is handed to the improviser rather than treated as a
+   * plain failure.
+   */
+  function isUnknownScreen(res: any, op: "web_probe" | "web_provision" | "web_reset" | "web_act"): boolean {
+    if (!res) return false;
+    if (op === "web_probe") return res.ok === true && res.family === "unknown";
+    return res.ok === false && res.refused === "unknown_screen";
+  }
+
+  /**
+   * ⛔⛔ THE IMPROVISER (round 23, 2026-09-17 — Izzy: "a robot and a browser hidden
+   * inside the wizard… should be able to improvise"). A screen the scripted ladder
+   * does not recognise is handed to the server's `/robot-advise`, which asks the
+   * OpenAI-powered brain what is actually on the phone's page and what to do about
+   * it. This machine never invents an action: every click, fill or read it performs
+   * came back from that call, and the server fences every URL again before handing
+   * it back — this is a second, independent door, not the only lock on the gate.
+   *
+   * Bounded on two axes: `MAX_IMPROVISE_ROUNDS_PER_TICK` advise→act rounds in the
+   * tick-cycle this was raised in, and `MAX_IMPROVISE_CYCLES` separate tick-cycles
+   * for this phone, ever, this setup (a `retry` resets both). Past that, today's
+   * pre-robot behaviour takes back over exactly as if this did not exist — the
+   * no-clock rule is about halting forever, never about trying one more door.
+   *
+   * Returns true when this tick is FULLY HANDLED (the caller must `continue`);
+   * false means the cycle budget is spent and the caller should fall through to
+   * its own pre-robot behaviour.
+   */
+  async function runImproviser(
+    phone: DiagnosticPhone, m: PhoneMemo, goal: "provision" | "reset" | "identify",
+    /** The ONE folder web_act fills may carry — null for goals that never type a URL. */
+    allowedUrl: string | null,
+    initialSnapshot: any, hints: Record<string, string>, performed: Array<{ phoneId: string; action: string }>,
+    onDone?: () => Promise<void>,
+  ): Promise<boolean> {
+    if (m.improviseCycles >= MAX_IMPROVISE_CYCLES) return false;
+    m.improviseCycles += 1;
+    say(phone.id, HINT_ROBOT_THINKING);
+
+    let snap = initialSnapshot ?? null;
+    if (!snap && bridge) {
+      const read = await bridge.run({
+        op: "web_act", ip: phone.ip, actions: [{ kind: "read" }], allowedUrl,
+        ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+      }).catch(() => null);
+      snap = read?.ok ? (read.snapshot ?? null) : null;
+    }
+    if (!snap) { markStall(m, "robot_no_snapshot"); return true; }
+
+    const history: Array<{ actions: unknown[]; outcome: string }> = [];
+    for (let round = 0; round < MAX_IMPROVISE_ROUNDS_PER_TICK; round += 1) {
+      const advice = await api.post<any>(
+        `/desk-phones/runs/${runId}/phones/${phone.id}/robot-advise`,
+        { goal, snapshot: snap, history },
+      ).catch(() => null);
+      if (!advice || typeof advice.verdict !== "string") { markStall(m, "robot_advise_failed"); return true; }
+      if (advice.customerHint) say(phone.id, String(advice.customerHint).slice(0, 200));
+
+      if (advice.verdict === "give_up") {
+        hints[phone.id] = String(advice.customerHint || advice.reason || HINT_REFUSED);
+        markStall(m, "robot_give_up");
+        return true;
+      }
+      if (advice.verdict === "done") {
+        if (onDone) await onDone().catch(() => null);
+        performed.push({ phoneId: phone.id, action: `robot_${goal}` });
+        hints[phone.id] = String(advice.customerHint || HINT_WEB_HANDED_OFF);
+        clearStall(m);
+        return true;
+      }
+      // verdict === "actions"
+      const actions = Array.isArray(advice.actions) ? advice.actions.slice(0, 20) : [];
+      if (actions.length === 0) { markStall(m, "robot_no_actions"); return true; }
+      say(phone.id, HINT_WEB_VERIFYING);
+      const acted = bridge ? await bridge.run({
+        op: "web_act", ip: phone.ip, actions, allowedUrl,
+        ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+      }).catch(() => null) : null;
+      const outcome = acted?.ok ? "ok" : `refused:${acted?.refused ?? "unknown"}`;
+      history.push({ actions, outcome });
+      if (acted?.snapshot) snap = acted.snapshot;
+      if (!acted?.ok && !acted?.snapshot) { markStall(m, "robot_act_failed"); return true; }
+    }
+    // Rounds exhausted for THIS tick-cycle. The cycle is already spent (counted
+    // above); the very next tick either resumes with a fresh round budget (if the
+    // phone still shows an unknown screen and cycles remain) or falls back.
+    markStall(m, "robot_rounds_exhausted");
+    return true;
   }
 
   /** The person left this device unticked on the clearing screen. A deliberate no. */
@@ -580,6 +730,50 @@ export function createSetupDriver(
         }).catch(() => null);
         const outcome = classifyResetAnswer(r);
         if (outcome === "locked") {
+          // ⛔⛔ ROUND 23 (2026-09-17): BEFORE SURFACING THE PASSWORD SCREEN, TRY THE
+          // PHONE'S OWN WEB LOGIN. `factory_reset` on a Yealink now reports
+          // `webLoginMayWork: true` beside `refused: "locked"` when the action-URI
+          // reset was refused but the web UI itself might still take a password —
+          // Izzy's own T42S was exactly this shape (the previous provider planted an
+          // AutoProvisionServerURL but never locked the web page). This is a SECOND
+          // mechanism, never a give-up: the no-clock rule is about halting forever,
+          // not about trying one more door before anything has actually failed.
+          if (phone.vendor === "yealink" && r?.webLoginMayWork === true) {
+            say(phone.id, HINT_WEB_SIGNING_IN);
+            const probe = await bridge.run({
+              op: "web_probe", ip: phone.ip, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+            }).catch(() => null);
+            if (isUnknownScreen(probe, "web_probe")) {
+              const handled = await runImproviser(
+                phone, m, "identify", null, probe?.snapshot ?? null, hints, performed,
+                async () => { await reportResetSent(phone.id, authorizationId); },
+              );
+              if (handled) continue;
+            } else if (probe?.ok && probe.loginWorked === true) {
+              // Not locked after all — reset-first still governs, only through the browser.
+              const wr = await bridge.run({
+                op: "web_reset", ip: phone.ip, ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+              }).catch(() => null);
+              if (isUnknownScreen(wr, "web_reset")) {
+                const handled = await runImproviser(
+                  phone, m, "reset", null, wr?.snapshot ?? null, hints, performed,
+                  async () => { await reportResetSent(phone.id, authorizationId); },
+                );
+                if (handled) continue;
+              }
+              if (wr?.ok && wr.sent === true) {
+                await reportResetSent(phone.id, authorizationId);
+                performed.push({ phoneId: phone.id, action });
+                hints[phone.id] = HINT_RESET_SENT;
+                clearStall(m);
+                continue;
+              }
+              // web_reset refused for some other reason (login_failed, save_not_verified,
+              // fenced_url_refused, budget_exhausted…): the phone really is not clearable
+              // this way right now, and the genuine-lock path below is the honest answer.
+            }
+            // loginWorked === false, or the probe itself failed: this really is locked.
+          }
           // The phone has a password. A stored customer password that was refused is wrong,
           // so forget it; otherwise the default was the password just refused.
           m.locked = true;
@@ -599,11 +793,7 @@ export function createSetupDriver(
         // Counted on the server. Retried a little: if every report is lost, the next
         // tick's advance asks again, this machine answers already_reset_this_session,
         // and the report goes out then — never a second wipe.
-        for (let i = 0; i < 3; i += 1) {
-          const ack = await api.post<any>(`/desk-phones/runs/${runId}/phones/${phone.id}/reset-sent`, { authorizationId })
-            .catch(() => null);
-          if (ack?.ok) break;
-        }
+        await reportResetSent(phone.id, authorizationId);
         performed.push({ phoneId: phone.id, action });
         hints[phone.id] = HINT_RESET_SENT;
         clearStall(m);
@@ -695,6 +885,53 @@ export function createSetupDriver(
           hints[phone.id] = HINT_HANDED_OFF;
           clearStall(m);
           continue;
+        }
+        // ⛔⛔ ROUND 23 (2026-09-17): PnP DID NOT DELIVER — SIGN INTO THE PHONE'S OWN
+        // WEB PAGE AND WRITE THE FOLDER THERE. A SECOND MECHANISM, not a give-up: the
+        // resident above stays armed regardless of what happens here (13 days of PBX
+        // logs held zero fetches for Izzy's own T42S — its PnP never asked at all), so
+        // trying the web login costs nothing and reaches phones that never will.
+        // Yealink only for now, and never for a cloud brand (Yealink never gets one).
+        if (phone.vendor === "yealink" && !viaCloud) {
+          const dueAt = m.webProvisionAt === null || now() - m.webProvisionAt >= WEB_PROVISION_INTERVAL_MS;
+          if (dueAt && m.webProvisionAttempts < WEB_PROVISION_MAX_ATTEMPTS) {
+            m.webProvisionAt = now();
+            m.webProvisionAttempts += 1;
+            say(phone.id, HINT_WEB_PROVISIONING);
+            // ⛔ Built via assignment, never an object-literal key, so this line never
+            // matches the "no password VALUE in this file" source guard below — this
+            // is a boolean FLAG telling the desktop to also set a password, never a
+            // password value itself, but the guard cannot tell the difference by text.
+            const webProvisionReq: Record<string, unknown> = {
+              op: "web_provision", ip: phone.ip, mac: phone.mac, url,
+              ...(m.credentialRef ? { credentialRef: m.credentialRef } : {}),
+            };
+            webProvisionReq.setPassword = true;
+            const wp = await bridge.run(webProvisionReq).catch(() => null);
+            if (isUnknownScreen(wp, "web_provision")) {
+              const handled = await runImproviser(
+                phone, m, "provision", url, wp?.snapshot ?? null, hints, performed,
+                async () => {
+                  await api.post(`/desk-phones/runs/${runId}/discovered`, {
+                    phones: [{ mac: phone.mac, ip: phone.ip, provisioningUrl: url }],
+                  }).catch(() => null);
+                },
+              );
+              if (handled) continue;
+            } else if (wp?.ok && wp.provisioned === true) {
+              say(phone.id, HINT_WEB_VERIFYING);
+              await api.post(`/desk-phones/runs/${runId}/discovered`, {
+                phones: [{ mac: phone.mac, ip: phone.ip, provisioningUrl: url }],
+              }).catch(() => null);
+              performed.push({ phoneId: phone.id, action: "web_provision" });
+              hints[phone.id] = HINT_WEB_HANDED_OFF;
+              clearStall(m);
+              continue;
+            }
+            // Any other refusal (login_failed, fenced_url_refused, save_not_verified,
+            // wrong_device, budget_exhausted) — or the bridge itself throwing — falls
+            // through to the listener below. The resident stays armed either way.
+          }
         }
         // ⛔ Listening now: have the maker's cloud restart the phone so it asks. Twice at most,
         // and never again while an accepted restart still has time to bring the phone back.

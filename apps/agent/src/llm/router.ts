@@ -12,7 +12,7 @@ import type { ToolSpec, ToolContext } from "../tools/toolRegistry";
 import { toolsForRole, executeTool } from "../tools/toolRegistry";
 import { readFinalSpeech, SpeechStreamError, type SpeechDelta } from "./speechStream";
 
-export type TaskClass = "support_chat" | "task_extraction" | "diagnostics" | "security_analysis" | "report_writing" | "policy_editing";
+export type TaskClass = "support_chat" | "task_extraction" | "diagnostics" | "security_analysis" | "report_writing" | "policy_editing" | "phone_web_robot";
 export type ProviderName = "openai" | "anthropic";
 
 export interface RouteTable {
@@ -93,6 +93,11 @@ export const DEFAULT_ROUTES: RouteTable = {
   security_analysis: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
   report_writing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
   policy_editing: { primary: "anthropic", model: ANTHROPIC_MODEL_HEAVY, fallbackModel: OPENAI_MODEL },
+  // The desk-phone wizard's screen-reading brain (round 23, 2026-09-17). Izzy's
+  // explicit instruction: "the actual AI agent (OpenAI) runs the wizard." Sonnet 5
+  // stays the failover so a provider outage never turns an unrecognised screen into
+  // an unconditional hands-on halt.
+  phone_web_robot: { primary: "openai", model: OPENAI_MODEL, fallbackModel: ANTHROPIC_MODEL },
 };
 
 /**

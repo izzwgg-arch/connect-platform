@@ -32,6 +32,7 @@ import { buildInvestigationTools } from "./tools/investigationTools";
 import { makeInvestigationClient } from "./pbx/investigationClient";
 import { buildWorkbenchTools } from "./tools/workbenchTools";
 import { buildCreativeTools, creativeToolsPrompt } from "./tools/creativeTools";
+import { advisePhoneRobot } from "./tools/phoneRobotAdvisor";
 import { makeWorkbenchClient } from "./pbx/workbenchClient";
 import { DiagnosticsEngine } from "./diag/engine";
 import { registerDiagRoutes } from "./diag/routes";
@@ -1297,6 +1298,33 @@ async function main() {
       }
     }, 15 * 60 * 1000).unref();
   }
+
+  // ── Phone web robot (round 23, 2026-09-17): the office wizard's brain for a screen
+  // the scripted ladder does not recognise. Server-to-server only, exactly like
+  // /ui/translate above — the api owns the customer, the tenant, and its own copy of
+  // the URL fence; this only ever proposes a plan from a text snapshot it is handed.
+  // ⛔ Deliberately OUTSIDE the `if (prisma)` block: this feature needs no database.
+  app.post("/agent/phone-robot/advise", async (req, reply) => {
+    const secret = process.env.AGENT_INTERNAL_SECRET;
+    if (!secret || req.headers["x-agent-internal-secret"] !== secret) {
+      return reply.code(403).send({ error: "forbidden" });
+    }
+    const body = (req.body ?? {}) as {
+      goal?: unknown; snapshot?: unknown; history?: unknown; allowedUrl?: unknown;
+    };
+    const goal = body.goal === "provision" || body.goal === "reset" || body.goal === "identify" ? body.goal : null;
+    if (!goal) return reply.code(400).send({ error: "invalid_goal" });
+    const history = Array.isArray(body.history)
+      ? (body.history as Array<{ actions: unknown[]; outcome: string }>)
+      : [];
+    const advice = await advisePhoneRobot(router, {
+      goal,
+      snapshot: body.snapshot ?? {},
+      history,
+      allowedUrl: typeof body.allowedUrl === "string" ? body.allowedUrl : null,
+    });
+    return reply.send(advice);
+  });
 
   app.get("/health", async () => ({ ok: true, service: "@connect/agent", ts: new Date().toISOString() }));
 

@@ -90,6 +90,9 @@ import { canonicalPortalOrigin } from "../publicOrigins";
 // ⛔ The office wizard's own RPS claim (Izzy, 2026-09-17). `recordLabel` is where a
 // Yealink's serial usually arrives, so it is the moment worth trying the claim.
 import { ensureYealinkRedirect, type OfficeWizardClaimer } from "./yealinkRedirectClaim";
+// ⛔ Round 23, 2026-09-17: the Yealink ticket-portal session screens (Admin → Integrations)
+// live in their own file for the same reason the GDMS ones don't — this one is long enough.
+import { registerYealinkMacRemovalRoutes } from "./yealinkMacRemovalRoutes";
 // ⛔ Duplicated in miniature from deskPhoneRoutes.ts's requesterIpOf rather than
 // imported: that file imports `registerDeviceCloudRoutes` FROM this one, so an
 // import the other way would be a runtime circular value-import.
@@ -1714,4 +1717,7 @@ export function registerDeviceCloudRoutes(app: FastifyInstance, ctx: DeviceCloud
     });
     return reply.send({ ok: true, revoked: out.count });
   });
+
+  /* ── Loopcom staff: the Yealink ticket-portal session (round 23) ─────────── */
+  registerYealinkMacRemovalRoutes(app, { db, getUser, isSuper, audit: deps.audit });
 }

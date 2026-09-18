@@ -21,10 +21,13 @@ import { join } from "node:path";
 
 /**
  * ⛔ CRLF-normalised: this tree is checked out CRLF under core.autocrlf=true.
- * ⛔ BOTH route files: the maker-cloud routes (2026-09-14) live beside the wizard's and
- * are held to exactly the same ordering rules.
+ * ⛔ ALL THREE route files: the maker-cloud routes (2026-09-14) and the phone-web-robot
+ * routes (round 23, 2026-09-17) live beside the wizard's own and are held to exactly the
+ * same ordering rules — "a new provider action added to one of two route files is
+ * invisible to the route-order guard unless the guard reads both" (2026-09-14 handoff),
+ * and that trap widens to N files, not just two.
  */
-const raw = ["deskPhoneRoutes.ts", "deviceCloudRoutes.ts"]
+const raw = ["deskPhoneRoutes.ts", "deviceCloudRoutes.ts", "phoneRobotRoutes.ts"]
   .map((f) => readFileSync(join(__dirname, f), "utf8").replace(/\r\n/g, "\n"))
   .join("\n");
 

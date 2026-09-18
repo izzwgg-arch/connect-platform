@@ -133,12 +133,14 @@ test("ADVERSARIAL: an operation name outside the list is refused before its argu
   assert.equal(seen.length, 0, "not one request should have left the machine");
 });
 
-test("ADVERSARIAL: the allowlist is exactly nine operations and none of them is a request-sender", () => {
-  // ⛔ It was eight until 2026-09-11, when `factory_reset` was added on Izzy's mandate.
-  // The number is pinned so adding a tenth is a deliberate act with its own test, and
-  // the forbidden list is what actually matters: no verb here takes a URL, a command
+test("ADVERSARIAL: the allowlist is exactly thirteen operations and none of them is a request-sender", () => {
+  // ⛔ It was eight until 2026-09-11, when `factory_reset` was added on Izzy's mandate,
+  // and thirteen since 2026-09-17 (round 23), when the four `web_*` ops joined — each
+  // one a NAMED verb into phoneWebRobot.ts's own fenced browser, never a raw request.
+  // The number is pinned so adding a fourteenth is a deliberate act with its own test,
+  // and the forbidden list is what actually matters: no verb here takes a URL, a command
   // or a request body from the caller.
-  assert.equal(PHONE_OPERATIONS.length, 9);
+  assert.equal(PHONE_OPERATIONS.length, 13);
   for (const forbidden of ["reset", "run_command", "http", "request", "exec", "eval"]) {
     assert.ok(!(PHONE_OPERATIONS as readonly string[]).includes(forbidden), forbidden);
   }

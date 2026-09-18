@@ -210,7 +210,11 @@ test("a phone that refuses our password was NOT reset, and is not counted as res
   let status = 401;
   const { api, advance } = cap({ http: async () => res({ status }) });
   const first = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
-  assert.deepEqual(first, { ok: false, refused: "locked" });
+  // ⛔ round 23, 2026-09-17: a Yealink Action-URI 401 on a factory phone is that
+  // firmware's untrusted-IP default, not proof the WEB login will also fail — see
+  // capability.ts's comment on this exact branch. The hint changes nothing about
+  // this test's point: nothing was wiped, and the phone is not counted as reset.
+  assert.deepEqual(first, { ok: false, refused: "locked", webLoginMayWork: true });
   status = 200;
   advance(120_000);
   const again = await api.run({ op: "factory_reset", ip: "192.168.1.41", model: "T46G", authorizationId: "auth-1" } as any);
@@ -267,9 +271,13 @@ test("a factory reset is fenced to the office network like everything else", asy
 });
 
 test("there is no way to express an arbitrary request", () => {
-  // the shape of the allowlist IS the security property
-  assert.deepEqual([...PHONE_OPERATIONS].sort(),
-    ["arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning", "test_credentials", "trigger_autop"]);
+  // the shape of the allowlist IS the security property. The four web_* ops
+  // (round 23, 2026-09-17) are named verbs into phoneWebRobot.ts's own fenced
+  // browser — see that file's tests for why they are not an escape hatch.
+  assert.deepEqual([...PHONE_OPERATIONS].sort(), [
+    "arm_pnp", "disarm_pnp", "discover", "factory_reset", "fingerprint", "reboot", "set_provisioning",
+    "test_credentials", "trigger_autop", "web_act", "web_probe", "web_provision", "web_reset",
+  ]);
 });
 
 test("a public address is refused even when the server asked for it", async () => {

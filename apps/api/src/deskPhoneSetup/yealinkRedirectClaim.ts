@@ -27,6 +27,9 @@ import { db as defaultDb } from "@connect/db";
 import { DeviceError } from "./yealinkRps";
 import { managedModel } from "./yealinkConfig";
 import { ManagedPhoneService } from "./managedPhoneService";
+// ⛔ Round 23, 2026-09-17: a `conflict` outcome now also fires Yealink's own MAC-removal
+// ticket, best-effort and fire-and-forget — see yealinkMacRemoval.ts's own header.
+import { maybeFileYealinkRelease } from "./yealinkMacRemoval";
 
 // ⛔⛔ NEVER import from `./deskPhoneRoutes` here, even though that file has its own
 // `defaultProvisioningUrlFor`/`requesterIpOf`. `deskPhoneRoutes.ts` imports THIS
@@ -199,6 +202,14 @@ async function run(
       : state === "conflict" ? "DESK_PHONE_VENDOR_REDIRECT_CONFLICT" : "DESK_PHONE_VENDOR_REDIRECT_FAILED",
     { mac: phone.macAddress, serialTail: serialTailOf(serialNumber), rpsState: result.rpsState, code: result.lastError ?? null },
   );
+  if (state === "conflict") {
+    // ⛔ Fire-and-forget: Yealink's own release ticket is a nicety on top of an outcome
+    // that has already been decided and recorded above; it must never delay or fail this
+    // call. `maybeFileYealinkRelease` already never throws — the `.catch` is belt-and-braces.
+    void maybeFileYealinkRelease(db, deps.audit, {
+      tenantId: user.tenantId, phoneId: phone.id, mac: phone.macAddress, serial: serialNumber,
+    }).catch(() => {});
+  }
   return { ok: true, state };
 }
 
