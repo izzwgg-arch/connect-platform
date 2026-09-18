@@ -91,7 +91,12 @@ export class DesktopLinkClient {
     try {
       const res = await f(`${this.deps.portalUrl}${path}`, {
         method, signal: ctl.signal,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.token}`, ...(this.deps.userAgent ? { "User-Agent": this.deps.userAgent } : {}) },
+        // ⛔ WHICH COMPUTER this is, on every call — not just on hello. One person
+        // may have two machines signed into the same Loopcom account, and without
+        // this the server cannot tell their long-polls apart: a tool call meant for
+        // the machine in front of them could be handed to the other one (proven
+        // 2026-09-18 — a file appeared on a different computer entirely).
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.token}`, "x-loopcom-desktop-id": this.desktopId, ...(this.deps.userAgent ? { "User-Agent": this.deps.userAgent } : {}) },
         ...(body === undefined || method === "GET" ? {} : { body: JSON.stringify(body) }),
       });
       const text = await res.text();

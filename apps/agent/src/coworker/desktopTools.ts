@@ -72,7 +72,7 @@ export const COWORKER_MAX_TOOL_ITERATIONS = Number(process.env.AGENT_COWORKER_MA
  * The system block that turns on the hands. Appended only when a desktop is
  * connected and its tools are on the table — never for a browser-tab chat.
  */
-export function coworkerHandsPrompt(manifest: DesktopManifest): string {
+export function coworkerHandsPrompt(manifest: DesktopManifest, otherComputers: { hostname: string }[] = []): string {
   const mcp = (manifest.mcpServers ?? []).filter((s) => s.state === "connected");
   const mcpLine = mcp.length
     ? `Connected MCP servers: ${mcp.map((s) => `${s.name} (${s.tools} tool${s.tools === 1 ? "" : "s"})`).join(", ")}. Their tools are named mcp_<server>_<tool>; use them when the person asks for what that server does, or says "use my MCP".`
@@ -99,8 +99,11 @@ export function coworkerHandsPrompt(manifest: DesktopManifest): string {
     `DIAGNOSTICS: "run diagnostics", "check my computer", "check the Loopcom app" → call computer_diagnostics (it measures; it changes nothing) and report the measurements with their status. Unknown stays unknown — never invent a cause the measurements do not show.`,
     `LOOPS: if a tool fails the same way twice, stop repeating it — change approach or report the failure with the exact error. Do not retry a denied or cancelled call.`,
     `If the person says "cancel" or "stop", stop calling tools and report what was done so far.`,
+    otherComputers.length
+      ? `THIS PERSON HAS MORE THAN ONE COMPUTER SIGNED IN (${[manifest.hostname, ...otherComputers.map((c) => c.hostname)].filter(Boolean).join(", ")}). Everything you do runs on ${manifest.hostname || "the one named above"} — the computer whose Loopcom app connected most recently — and it stays there for the whole task. Name that computer when you report what you did, and if they meant a different one, tell them to open Loopcom on it and ask again.`
+      : "",
     mcpLine,
-  ].join("\n");
+  ].filter(Boolean).join("\n");
 }
 
 /** The block when the person is in the bubble but no desktop is connected. */

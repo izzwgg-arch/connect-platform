@@ -360,7 +360,7 @@ async function main() {
       await audit.record({ actor: "system", event: "chat.coworker_tool_discovery", tenantId: ctx.tenantId, conversationId, payload: { offered: only.size, of: manifest.tools.length, families: [...chosen.families], reason: chosen.reason } }).catch(() => undefined);
       return {
         tools: buildDesktopTools(desktopLink!, identity, manifest, taskId, conversationId, { only, onCalled: (name) => familyMemory.note(conversationId, name) }),
-        prompt: coworkerHandsPrompt(manifest),
+        prompt: coworkerHandsPrompt(manifest, desktopLink!.sessionsFor(identity).filter((x) => x.manifest.desktopId !== manifest.desktopId).map((x) => ({ hostname: x.manifest.hostname }))),
         maxIterations: COWORKER_MAX_TOOL_ITERATIONS,
         taskId,
         onDone: () => desktopLink!.endTask(identity, taskId),

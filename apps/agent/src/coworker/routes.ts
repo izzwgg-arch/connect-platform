@@ -29,6 +29,18 @@ function who(req: FastifyRequest): LinkIdentity | null {
   return { tenantId: id.tenantId, clientUserId: id.clientUserId };
 }
 
+/**
+ * WHICH COMPUTER is calling. The app sends its own id on every request; an older
+ * app that does not is treated as the person's preferred computer, exactly as
+ * before. ⛔ It is NOT an identity: the token still decides whose desktop this is,
+ * and a made-up id can only ever reach a session that said hello with it.
+ */
+function whichDesktop(req: FastifyRequest): string | undefined {
+  const raw = (req.headers["x-loopcom-desktop-id"] ?? "") as string | string[];
+  const v = (Array.isArray(raw) ? raw[0] : raw).trim();
+  return v && /^[A-Za-z0-9_.:-]{1,80}$/.test(v) ? v : undefined;
+}
+
 export function registerCoworkerLinkRoutes(app: FastifyInstance, link: DesktopLink, audit: AuditLog | null = null) {
   app.post("/agent/coworker/hello", async (req, reply) => {
     const id = who(req);
@@ -49,8 +61,9 @@ export function registerCoworkerLinkRoutes(app: FastifyInstance, link: DesktopLi
     if (!id) return reply.code(403).send({ error: "forbidden" });
     const q = (req.query ?? {}) as { wait?: string };
     const waitMs = Math.min(Math.max(0, Number(q.wait ?? 25) * 1000 || 0), MAX_POLL_WAIT_MS);
-    if (!link.session(id)) return reply.code(409).send({ error: "not_registered", message: "Say hello first." });
-    const msg = await link.next(id, waitMs);
+    const desktopId = whichDesktop(req);
+    if (!link.session(id, desktopId)) return reply.code(409).send({ error: "not_registered", message: "Say hello first." });
+    const msg = await link.next(id, waitMs, desktopId);
     if (!msg) return reply.code(204).send();
     return { message: msg };
   });
@@ -92,7 +105,7 @@ export function registerCoworkerLinkRoutes(app: FastifyInstance, link: DesktopLi
   app.post("/agent/coworker/goodbye", async (req, reply) => {
     const id = who(req);
     if (!id) return reply.code(403).send({ error: "forbidden" });
-    const gone = link.goodbye(id);
+    const gone = link.goodbye(id, whichDesktop(req));
     await audit?.record({ actor: "system", event: "coworker.desktop_goodbye", tenantId: id.tenantId, payload: { userId: id.clientUserId, wasConnected: gone } });
     return { ok: true };
   });

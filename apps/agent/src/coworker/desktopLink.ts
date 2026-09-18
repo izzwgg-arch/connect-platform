@@ -81,9 +81,16 @@ type Inflight = { resolve: (r: DesktopCallResult) => void; timer: ReturnType<typ
 type Session = {
   key: string;
   identity: LinkIdentity;
+  /** ⛔ ONE SESSION PER COMPUTER, not per person — see sessionKey(). */
+  desktopId: string;
   manifest: DesktopManifest;
   connectedAt: number;
+  /** Last POLL. Presence only — a poll is a heartbeat, not work. */
   lastSeen: number;
+  /** Last hello (app start, manifest change, every 5 min). */
+  helloAt: number;
+  /** Last time a tool call was actually sent to or answered by THIS computer. */
+  lastActivityAt: number;
   queue: DesktopMessage[];
   waiters: Waiter[];
   inflight: Map<string, Inflight>;
@@ -112,8 +119,41 @@ export const MAX_RESULT_CHARS = 60_000;
 
 export const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
 
+/**
+ * How recently this computer CONNECTED. ⛔ Deliberately not the last poll (every
+ * linked machine polls forever whether or not anybody is at it), not the periodic
+ * re-hello (which would reshuffle two idle machines every five minutes), and not
+ * the last tool call (that is the AGENT's own doing — ranking on it makes the
+ * first pick self-reinforcing and leaves the person no way to redirect the work).
+ * The app's connection is the one signal the PERSON controls: open Loopcom on the
+ * machine you are sitting at and new tasks go there.
+ */
+function rank(s: { connectedAt: number }): number {
+  return s.connectedAt;
+}
+
 export function identityKey(id: LinkIdentity): string {
   return `${id.tenantId}:${id.clientUserId}`;
+}
+
+/**
+ * ⛔⛔ THE SESSION IS PER COMPUTER, NOT PER PERSON (2026-09-18).
+ *
+ * It used to be keyed on the identity alone, and ONE person with TWO computers
+ * signed into the same Loopcom account therefore shared a single queue: the model
+ * was shown machine A's tool list while `deliver()` handed the call to whichever
+ * machine's long-poll happened to be at the head of the waiter list. Proven on
+ * this very repo — a desktop advertising 72 tools was asked to open Notepad and
+ * the file appeared on a DIFFERENT computer (an older build, 34 tools, another
+ * user profile). A person with a desktop and a laptop would have had their work
+ * land on whichever one the race picked.
+ *
+ * So: every computer gets its own session, and a TASK is bound to the computer it
+ * started on (see `preferredKey` / `taskDesktop`) so a multi-step job can never
+ * jump machines half way through.
+ */
+export function sessionKey(id: LinkIdentity, desktopId: string): string {
+  return `${identityKey(id)}|${desktopId || "legacy"}`;
 }
 
 /** Strict, bounded read of a manifest handed over the wire. Unknown/oversized → null. */
@@ -210,6 +250,8 @@ export function boundContent(content: unknown): unknown {
 
 export class DesktopLink {
   private sessions = new Map<string, Session>();
+  /** taskId → session key: a task stays on the computer it started on. */
+  private taskDesktop = new Map<string, string>();
   /**
    * Told when the desktop reports an approval prompt on the person's screen, with
    * the tool it is for — the Coworker workspace shows that step as "waiting for your
@@ -220,25 +262,47 @@ export class DesktopLink {
 
   /** The desktop announced itself (again). Replaces the manifest; keeps the queue. */
   hello(identity: LinkIdentity, manifest: DesktopManifest): { key: string; replaced: boolean } {
-    const key = identityKey(identity);
+    const key = sessionKey(identity, manifest.desktopId);
     const existing = this.sessions.get(key);
     const t = this.now();
     if (existing) {
       existing.manifest = manifest;
       existing.lastSeen = t;
+      existing.helloAt = t;
       return { key, replaced: true };
     }
     this.sessions.set(key, {
-      key, identity, manifest, connectedAt: t, lastSeen: t,
+      key, identity, desktopId: manifest.desktopId, manifest, connectedAt: t, lastSeen: t, helloAt: t, lastActivityAt: 0,
       queue: [], waiters: [], inflight: new Map(), cancelledTasks: new Set(), activeTasks: new Set(),
       stats: { dispatched: 0, completed: 0, failed: 0, timedOut: 0, cancelled: 0 },
     });
     return { key, replaced: false };
   }
 
+  /** Every computer this person has linked, the one new work would go to first. */
+  sessionsFor(identity: LinkIdentity): Session[] {
+    const prefix = `${identityKey(identity)}|`;
+    // ⛔ The tiebreak is not decoration: two apps started by the same script can
+    // connect inside one millisecond, and without it the order (hence which
+    // computer new work goes to) depends on Map insertion order.
+    return [...this.sessions.values()].filter((s) => s.key.startsWith(prefix)).sort((a, b) => rank(b) - rank(a) || a.desktopId.localeCompare(b.desktopId));
+  }
+
+  /**
+   * The computer a NEW task should run on: the most recently CONNECTED one that is
+   * still present (see `rank`). Presence comes first — a machine that stopped
+   * polling is skipped however recently it connected — and a task, once started,
+   * stays where it started whatever happens to this ordering.
+   */
+  private preferred(identity: LinkIdentity): Session | null {
+    const all = this.sessionsFor(identity);
+    const live = all.filter((s) => this.now() - s.lastSeen < DESKTOP_PRESENCE_MS);
+    return live[0] ?? all[0] ?? null;
+  }
+
   /** The desktop signed off (app quitting). In-flight calls fail immediately. */
-  goodbye(identity: LinkIdentity): boolean {
-    const s = this.sessions.get(identityKey(identity));
+  goodbye(identity: LinkIdentity, desktopId?: string): boolean {
+    const s = desktopId ? this.sessions.get(sessionKey(identity, desktopId)) : this.preferred(identity);
     if (!s) return false;
     for (const [id, f] of s.inflight) {
       clearTimeout(f.timer);
@@ -248,21 +312,29 @@ export class DesktopLink {
     }
     for (const w of s.waiters) { clearTimeout(w.timer); w.resolve(null); }
     this.sessions.delete(s.key);
+    for (const [task, key] of this.taskDesktop) if (key === s.key) this.taskDesktop.delete(task);
     return true;
   }
 
-  session(identity: LinkIdentity): Session | null {
-    return this.sessions.get(identityKey(identity)) ?? null;
+  /**
+   * One computer's session. `desktopId` names it (the app sends it on every call);
+   * without one this is the preferred computer, which is what an older app that
+   * does not send the header gets.
+   */
+  session(identity: LinkIdentity, desktopId?: string): Session | null {
+    if (desktopId) return this.sessions.get(sessionKey(identity, desktopId)) ?? null;
+    return this.preferred(identity);
   }
 
-  /** Present = said hello and polled within DESKTOP_PRESENCE_MS. */
-  connected(identity: LinkIdentity): boolean {
-    const s = this.session(identity);
+  /** Present = said hello and polled within DESKTOP_PRESENCE_MS (any computer, or the named one). */
+  connected(identity: LinkIdentity, desktopId?: string): boolean {
+    const s = this.session(identity, desktopId);
     return !!s && this.now() - s.lastSeen < DESKTOP_PRESENCE_MS;
   }
 
   manifest(identity: LinkIdentity): DesktopManifest | null {
-    return this.connected(identity) ? this.session(identity)!.manifest : null;
+    const s = this.preferred(identity);
+    return s && this.now() - s.lastSeen < DESKTOP_PRESENCE_MS ? s.manifest : null;
   }
 
   /**
@@ -270,8 +342,8 @@ export class DesktopLink {
    * Polling is what keeps presence alive, so a desktop with nothing to do still
    * has to call this every ≤ DESKTOP_PRESENCE_MS.
    */
-  next(identity: LinkIdentity, waitMs: number): Promise<DesktopMessage | null> {
-    const s = this.session(identity);
+  next(identity: LinkIdentity, waitMs: number, desktopId?: string): Promise<DesktopMessage | null> {
+    const s = this.session(identity, desktopId);
     if (!s) return Promise.resolve(null);
     s.lastSeen = this.now();
     const queued = s.queue.shift();
@@ -304,9 +376,24 @@ export class DesktopLink {
     identity: LinkIdentity,
     call: { name: string; args: Record<string, unknown>; taskId: string; conversationId?: string; timeoutMs?: number },
   ): Promise<DesktopCallResult> {
-    const s = this.session(identity);
-    if (!s || !this.connected(identity)) {
+    // ⛔ A task stays on the computer it started on. The first call picks the
+    // preferred computer and binds the task to it; every later call of the same
+    // task follows that binding, so a job cannot finish on a different machine
+    // from the one it read the window on. If that computer went away, the task
+    // re-binds to the one that is present and says so in the result.
+    const bound = this.taskDesktop.get(call.taskId);
+    let s = bound ? this.sessions.get(bound) ?? null : null;
+    let moved = false;
+    if (s && this.now() - s.lastSeen >= DESKTOP_PRESENCE_MS) { s = null; moved = true; }
+    if (!s) {
+      s = this.preferred(identity);
+      if (s) this.taskDesktop.set(call.taskId, s.key);
+    }
+    if (!s || this.now() - s.lastSeen >= DESKTOP_PRESENCE_MS) {
       return Promise.resolve({ ok: false, content: { error: "desktop_not_connected", message: "The Loopcom app on the person's computer is not connected right now, so nothing can run there." } });
+    }
+    if (moved) {
+      return Promise.resolve({ ok: false, content: { error: "desktop_changed", message: `The computer this task was running on (${bound?.split("|")[1] ?? "?"}) went away. Anything already done stayed there. Say what was finished and ask the person before carrying on somewhere else.` } });
     }
     if (s.cancelledTasks.has(call.taskId)) {
       return Promise.resolve({ ok: false, content: { error: "task_cancelled", message: "The person cancelled this task." } });
@@ -315,6 +402,7 @@ export class DesktopLink {
     const id = randomUUID();
     const startedAt = this.now();
     s.stats.dispatched++;
+    s.lastActivityAt = startedAt;
     return new Promise<DesktopCallResult>((resolve) => {
       const timer = setTimeout(() => this.expire(s, id), timeoutMs);
       s.inflight.set(id, { resolve, timer, taskId: call.taskId, name: call.name, startedAt, deadlineMs: timeoutMs });
@@ -344,8 +432,14 @@ export class DesktopLink {
    * late".) Unknown or already-settled ids → false. Bounded: one extension is at
    * most APPROVAL_WAIT_MS, and an unanswered prompt still expires.
    */
+  /** The computer holding this call id (whichever of the person's computers it is). */
+  private holder(identity: LinkIdentity, callId: string): Session | null {
+    for (const s of this.sessionsFor(identity)) if (s.inflight.has(callId)) return s;
+    return null;
+  }
+
   extend(identity: LinkIdentity, callId: string, extraMs: number): boolean {
-    const s = this.session(identity);
+    const s = this.holder(identity, callId);
     if (!s) return false;
     s.lastSeen = this.now();
     const f = s.inflight.get(callId);
@@ -360,13 +454,14 @@ export class DesktopLink {
 
   /** The desktop reports what happened. Unknown/expired ids are ignored (false). */
   result(identity: LinkIdentity, callId: string, r: { ok: boolean; content: unknown }): boolean {
-    const s = this.session(identity);
+    const s = this.holder(identity, callId);
     if (!s) return false;
     s.lastSeen = this.now();
     const f = s.inflight.get(callId);
     if (!f) return false;
     clearTimeout(f.timer);
     s.inflight.delete(callId);
+    s.lastActivityAt = this.now();
     if (r.ok) s.stats.completed++; else s.stats.failed++;
     f.resolve({ ok: !!r.ok, content: boundContent(r.content), durationMs: this.now() - f.startedAt });
     return true;
@@ -378,28 +473,34 @@ export class DesktopLink {
    * desktop is told so it can stop subprocesses and the browser.
    */
   cancel(identity: LinkIdentity, taskId: string | null): { cancelled: number; flagged: number } {
-    const s = this.session(identity);
-    if (!s) return { cancelled: 0, flagged: 0 };
+    // ⛔ STOP MEANS STOP ON EVERY COMPUTER. The person pressed one button; they
+    // do not know (or care) which of their machines the job landed on.
+    const all = this.sessionsFor(identity);
+    if (!all.length) return { cancelled: 0, flagged: 0 };
     let n = 0;
-    for (const [id, f] of s.inflight) {
-      if (taskId && f.taskId !== taskId) continue;
-      clearTimeout(f.timer);
-      s.inflight.delete(id);
-      s.stats.cancelled++;
-      n++;
-      f.resolve({ ok: false, content: { error: "task_cancelled", message: "The person cancelled this task. Stop and report what was and was not done." } });
+    let flagged = 0;
+    for (const s of all) {
+      for (const [id, f] of s.inflight) {
+        if (taskId && f.taskId !== taskId) continue;
+        clearTimeout(f.timer);
+        s.inflight.delete(id);
+        s.stats.cancelled++;
+        n++;
+        f.resolve({ ok: false, content: { error: "task_cancelled", message: "The person cancelled this task. Stop and report what was and was not done." } });
+      }
+      // ⛔ Flag ACTIVE tasks too, not only the ones with a call in flight: a cancel
+      // that lands while the model is between tool calls (planning, or waiting on
+      // the provider) must still refuse the next dispatch, or the job carries on.
+      if (taskId) s.cancelledTasks.add(taskId);
+      else { for (const f of s.inflight.values()) s.cancelledTasks.add(f.taskId); for (const t of s.activeTasks) s.cancelledTasks.add(t); }
+      this.deliver(s, { kind: "cancel", taskId, issuedAt: new Date(this.now()).toISOString() });
+      flagged += s.cancelledTasks.size;
     }
-    // ⛔ Flag ACTIVE tasks too, not only the ones with a call in flight: a cancel
-    // that lands while the model is between tool calls (planning, or waiting on
-    // the provider) must still refuse the next dispatch, or the job carries on.
-    if (taskId) s.cancelledTasks.add(taskId);
-    else { for (const f of s.inflight.values()) s.cancelledTasks.add(f.taskId); for (const t of s.activeTasks) s.cancelledTasks.add(t); }
-    this.deliver(s, { kind: "cancel", taskId, issuedAt: new Date(this.now()).toISOString() });
-    return { cancelled: n, flagged: s.cancelledTasks.size };
+    return { cancelled: n, flagged };
   }
 
   isCancelled(identity: LinkIdentity, taskId: string): boolean {
-    return !!this.session(identity)?.cancelledTasks.has(taskId);
+    return this.sessionsFor(identity).some((s) => s.cancelledTasks.has(taskId));
   }
 
   /**
@@ -408,21 +509,25 @@ export class DesktopLink {
    * still stops the job: every later dispatch for the task is refused.
    */
   beginTask(identity: LinkIdentity, taskId: string): void {
-    this.session(identity)?.activeTasks.add(taskId);
+    for (const s of this.sessionsFor(identity)) s.activeTasks.add(taskId);
   }
 
-  /** The task finished (any outcome): its flags no longer need remembering. */
+  /** The task finished (any outcome): its flags and its computer binding go. */
   endTask(identity: LinkIdentity, taskId: string): void {
-    const s = this.session(identity);
-    s?.cancelledTasks.delete(taskId);
-    s?.activeTasks.delete(taskId);
+    for (const s of this.sessionsFor(identity)) { s.cancelledTasks.delete(taskId); s.activeTasks.delete(taskId); }
+    this.taskDesktop.delete(taskId);
   }
 
   status(identity: LinkIdentity) {
-    const s = this.session(identity);
+    const s = this.preferred(identity);
     if (!s) return { connected: false as const };
+    const all = this.sessionsFor(identity);
     return {
-      connected: this.connected(identity),
+      connected: this.now() - s.lastSeen < DESKTOP_PRESENCE_MS,
+      // ⛔ More than one computer signed into this account is normal, and which one
+      // a task runs on is decided per task — so say so instead of pretending there
+      // is only ever one.
+      desktops: all.map((x) => ({ desktopId: x.manifest.desktopId, hostname: x.manifest.hostname, appVersion: x.manifest.appVersion, tools: x.manifest.tools.length, lastSeenMsAgo: this.now() - x.lastSeen, lastActivityMsAgo: x.lastActivityAt ? this.now() - x.lastActivityAt : null, present: this.now() - x.lastSeen < DESKTOP_PRESENCE_MS, preferred: x.key === s.key })),
       desktopId: s.manifest.desktopId,
       appVersion: s.manifest.appVersion,
       hostname: s.manifest.hostname,
@@ -441,7 +546,7 @@ export class DesktopLink {
   sweep(idleMs = 10 * 60 * 1000): number {
     let n = 0;
     for (const s of [...this.sessions.values()]) {
-      if (this.now() - s.lastSeen > idleMs && s.inflight.size === 0) { this.goodbye(s.identity); n++; }
+      if (this.now() - s.lastSeen > idleMs && s.inflight.size === 0) { this.goodbye(s.identity, s.desktopId); n++; }
     }
     return n;
   }
