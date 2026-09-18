@@ -49,7 +49,8 @@ Full handoff: **`docs/ai-context/AGENT_HANDOFF_PLATFORM_AUDIO_BREAKUP_2026-09-17
   `/var/log/asterisk/full` keeps **ONE day** (no history on the box); `stasis/m:manager:core`
   high-water 3,000 hit 75×/day (AMI consumer over 110 ms — signaling stalls, not media);
   `audit.jsonl` 85 GB still unrotated; socket buffers at defaults; hourly `drop_caches` cron.
-- ⏳ **NOTHING DONE — every remedy is a PBX or vendor write, Izzy's call (handoff §9, ranked):**
+- ✅ **ROUND 2 (09-18): CONTABO TICKET FILED — no. 16240435361** (Izzy's instruction, his panel; Technical → Server Down/Connection Issue, vmi2718844, recurring since 09-06). Accounting proof attached: Sep 17 alone the carriers' RTCP counted **49,894 lost of 3,546,852** RTP packets sent, while every guest egress drop counter since boot totals ≈1,738 — the packets provably leave the VM. ⛔ Contabo's required panel diagnostic reads Failed/Warning ONLY because our geo firewall blocks their non-US probes (preempted in the ticket); their "Reboot server" suggestion was NOT clicked — a reboot fixes nothing and drops calls; the form's mandatory reboot-consent box WAS ticked, so if support proposes a reboot, schedule it outside 12:00–22:00 UTC. ⛔ "High-performance server" upsell does NOT help — same DC, same uplink, steal 0. A watcher on Izzy's PC (scratchpad proof/watch.sh, until 09-18 21:30 UTC) auto-captures a 75 s RTP pcap at the next loss-during-live-calls window.
+- ⏳ **Remaining remedies are PBX or vendor writes, Izzy's call (handoff §9, ranked):**
   (1) Contabo ticket with the per-hop table (the only fix of the cause); (2) `0001` → `us-central.telocall.com`
   (Cogent, 0 %, 11 ms) after Telocall confirms + fix the `:700`; (3) VoIP.ms trunks AND DID POPs
   NY1 → Chicago 1 (9 ms, 0 %) / Atlanta 1, BOTH halves per the 2026-09-10 NY2→NY1 recipe, one tenant

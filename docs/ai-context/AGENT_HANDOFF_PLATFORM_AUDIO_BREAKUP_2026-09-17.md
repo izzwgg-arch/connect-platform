@@ -387,3 +387,40 @@ Recording gap census: `scripts/pbx/diag/recording-gap-census.py <dir-of-wavs>` (
 
 Evidence files from this session (scratchpad, not committed): `loss-timeline.txt`, `perhop.txt`,
 `rec/*.wav` (12 recordings), `gap.py` (same as the committed script).
+
+---
+
+## 11. Round 2 (2026-09-18 00:25–00:50 UTC) — the accounting proof, and the Contabo ticket is FILED
+
+- **Accounting proof (read-only, closes "maybe the server dropped them"):** on Sep 17 alone the
+  carriers' RTCP receiver reports counted **49,894 lost of 3,546,852 RTP packets** the PBX sent on
+  sampled trunk legs (829 legs; DB sum of `txLost`/`txCount`). Every guest-side egress drop counter
+  since the Sep 12 boot totals ≈ **1,738**: fq_codel qdisc **1,708** of 61.4 M pkts (0.003 %, shared
+  with all traffic), NIC TX dropped **0** / errors **0**, `IpOutDiscards` **6**, `UdpSndbufErrors`
+  **0**, conntrack ≈ 24. There is no counter left to hide 50 k packets in one day — they left the VM.
+  Inbound `rxLost` summed at arrival that day: 1,112 of 3.7 M (sequence gaps arrive pre-made).
+- At 00:25 UTC (20:25 ET): 0 active calls, all paths 0 % — the diurnal shape again; a quiet-hour
+  reading proves nothing. A read-only watcher now runs from Izzy's PC (scratchpad `proof/watch.sh`,
+  background): every 10 min it logs loss to NY1/Telocall-media/Lumen-hop/atlanta1 + live call count
+  to `proof/timeline.csv`, and when loss ≥4 % fires DURING live calls it streams a 75 s RTP pcap off
+  the PBX (`tcpdump -w -` over ssh, nothing written on the PBX) + channelstats before/after. Parse
+  the pcap for outbound seq continuity (left the box) vs the RTCP delta (never arrived). Deadline
+  Sep 18 21:30 UTC, max 2 captures.
+- ✅ **CONTABO TICKET FILED — no. 16240435361**, 2026-09-18 ~00:47 UTC, by Izzy's explicit
+  instruction, from his logged-in panel (new.contabo.com → Support → Contact Us → Submit a Ticket):
+  Technical & Configuration → Server Down / Connection Issue → subscription vmi2718844, "recurring
+  issue" since 09/06/2026 09:00. Body = the §0/§3c evidence (Lumen path loss with hop table, Cogent
+  0 % controls, EU + residential 0 % controls, the 49,894/3,546,852 RTCP count, guest counters ≈ 0,
+  diurnal pattern), the traceroutes in the MTR field, and a preempt for their panel diagnostic.
+- ⛔ **Their panel diagnostic ran as a REQUIRED step and reads 1 Failed / 1 Warning: the ping and
+  port checks fail because OUR geo firewall blocks their non-US probe source — by design, not an
+  outage.** The ticket says so explicitly. ⛔ Their "Suggested action: Reboot server" was NOT
+  clicked and must never be — a reboot fixes nothing here and drops live calls.
+- ⚠ The form required ticking *"I understand that resolving this issue may require a server reboot
+  or brief downtime (only if necessary)"* — ticked as part of filing. **If support proposes a
+  reboot/migration, insist on scheduling outside 12:00–22:00 UTC** (business hours are when calls
+  run) and note a reboot is not a remedy for transit loss.
+- ⛔ Izzy asked whether Contabo's "high performance" servers would help → **NO for this fault**: a
+  VDS/dedicated in the same St. Louis DC uses the same upstream; steal is 0 and CPU is 90 % idle, so
+  there is no noisy-neighbor component to buy out of. Only the transit fix (or moving carriers onto
+  the Cogent-routed POPs, §9.2–9.4) changes anything.
