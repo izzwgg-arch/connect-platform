@@ -387,3 +387,38 @@ record → expect `UNVERIFIED` on the brand unless corrected; address "Suit 316-
 mailbox suite (TCR may flag). ⛔ Product hole to close (not done 09-18): either drop PUBLIC_PROFIT
 from the public form's choices, or add the three fields + a `fail` check in `runFilingChecks`. The
 $24 only lands after `brand_created`, so refusals never bill.
+
+## 000e. 2026-09-18 — Gesheft refiled (first real brand), and the entity-type question simplified
+Izzy's answers, in order: *"yes inc."*, *"It's Gesheft Supermarket Inc."*, *"s corp"* (an S corp is
+PRIVATE_PROFIT to the registry — "publicly traded" is the only thing PUBLIC_PROFIT means). Done
+through the deployed api with the §000c HS256 recipe (`/tmp/gesheft10dlc.js` on loopcom, copied
+into `app-api-1`): `PATCH /admin/texting-registration/<id>/business` {legalName "Gesheft
+Supermarket Inc.", entityType PRIVATE_PROFIT, street "51 Forest Rd Suite 316-207"} → 200, checks
+all pass except the VoIP.ms-number warn → `POST …/file` → `brand_review` in 0.5 s. Row:
+`telnyxBrandId 4b2001a0-b4f4-52ff-91bc-91c8ae70a50a`, `brandStatus OK`, `brandIdentityStatus`
+empty; raw `GET /10dlc/brand/<id>` (run with the app's own `resolveTelnyxCredentials` via
+`./node_modules/.bin/tsx` from `/app/apps/api` — `@connect/db` exports `db`, not `prisma`) shows
+`tcrBrandId BEBW9T8`, `identityStatus null`, `businessContactEmail null`, webhook set to
+`app.connectcomunications.com/api/webhooks/telnyx/10dlc`; `GET /10dlc/brand/feedback/<id>` → 400
+`{code 535, "Vetting request is pending"}`. `brandPhase` maps null identity + OK → pending, so the
+sweep keeps polling; on VERIFIED it purges the EIN and files the campaign. Charge:
+`BillingInvoice CC-202609-00017` OPEN $24.00, period = the filing instant, due 2026-10-03.
+⛔ The create response carried no `tcrBrandId`, so `tcrBrandId` = the Telnyx id until a refresh
+copies `BEBW9T8` in (`advanceBrand` base does `brand.tcrBrandId ?? reg.tcrBrandId`) — the
+14:39Z manual refresh did NOT change it; verify after the sweep and fix `toBrandDetail` if the GET
+shape differs from the create shape.
+**Form change `ea3e11f7`:** `BUSINESS_KIND_OPTIONS` LLC / Corporation / C corp on the public page,
+each `onChange` sets `entityType = PRIVATE_PROFIT` (local `businessKind` state only — the pick is
+not stored; a reloaded draft shows "Answered — pick again to change"). `runFilingChecks` adds
+`entityType` (fail on PUBLIC_PROFIT). Staff review page keeps the full five-way radio, so
+non-profit / government / sole proprietor are still fileable by staff. The sign-up wizard's
+`textingStep.tsx` (SignalWire filer) still offers "Publicly traded company" — different module,
+untouched. Tests 41/41; api tsc shows two PRE-EXISTING errors in `fakeDb.testutil.ts` (not mine).
+**Outcome by 15:05Z:** `brand_verified` 14:47:08Z, `ein_destroyed`, `campaign_created` 14:47:09Z
+(campaign `4b3001a0-b4fc-4f42-cc9c-f2c4d1af057f` / TCR `C5GLU0S`), `campaignStatus TCR_ACCEPTED`,
+seven `carrier_review` events all `approved` (networkIds 10017 AT&T, 10035 T-Mobile, 10038 Verizon,
+10037 US Cellular, 10631 ClearSky, 10901 Interop, 10538 Liberty). `tcrBrandId` fixed itself to
+`BEBW9T8` on the sweep, so the create-vs-GET shape worry above is closed. Deployed api + portal
+`ea3e11f7` via `deploy-direct.sh --commit` from the origin tip (this checkout is behind origin;
+commits were cherry-picked onto the tip in a scratch worktree and pushed). Still open: the number
+is VoIP.ms, so `live` + attach wait on the move; nobody has used the three-choice select.
