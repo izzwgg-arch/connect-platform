@@ -32,7 +32,7 @@ export function Avatar({ name, assetId, size = 36, square = false, className = "
 }
 
 /* ── Chip ───────────────────────────────────────────────────────────────── */
-export function Chip({ children, kind = "", icon, onClick, className = "", title }: { children: ReactNode; kind?: "" | "ok" | "warn" | "bad" | "ac" | "sel"; icon?: string; onClick?: () => void; className?: string; title?: string }) {
+export function Chip({ children, kind = "", icon, onClick, className = "", title, testId }: { children: ReactNode; kind?: "" | "ok" | "warn" | "bad" | "ac" | "sel"; icon?: string; onClick?: () => void; className?: string; title?: string; testId?: string }) {
   const inner = (
     <>
       {icon ? <Icon name={icon} /> : null}
@@ -41,12 +41,12 @@ export function Chip({ children, kind = "", icon, onClick, className = "", title
   );
   if (onClick)
     return (
-      <button type="button" className={`chip ${kind} ${className}`} onClick={onClick} title={title} aria-pressed={kind === "sel"}>
+      <button type="button" className={`chip ${kind} ${className}`} onClick={onClick} title={title} aria-pressed={kind === "sel"} data-testid={testId}>
         {inner}
       </button>
     );
   return (
-    <span className={`chip ${kind} ${className}`} title={title}>
+    <span className={`chip ${kind} ${className}`} title={title} data-testid={testId}>
       {inner}
     </span>
   );
@@ -67,7 +67,7 @@ export function Button({ children, kind = "", icon, small, wide, href, className
       {children}
     </>
   );
-  if (href) return <Link href={href} className={cls}>{inner}</Link>;
+  if (href) return <Link href={href} className={cls} {...(rest as any)}>{inner}</Link>;
   return (
     <button type="button" className={cls} disabled={loading || rest.disabled} {...rest}>
       {inner}
@@ -155,7 +155,7 @@ export function Dialog({ open, onClose, title, children, wide, footer }: { open:
 }
 
 /* ── Menu ───────────────────────────────────────────────────────────────── */
-export function Menu({ trigger, children, label = "More" }: { trigger?: ReactNode; children: ReactNode; label?: string }) {
+export function Menu({ trigger, children, label = "More", testId }: { trigger?: ReactNode; children: ReactNode; label?: string; testId?: string }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -166,7 +166,7 @@ export function Menu({ trigger, children, label = "More" }: { trigger?: ReactNod
   }, [open]);
   return (
     <div ref={ref} style={{ position: "relative" }}>
-      <button type="button" className="ib" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button type="button" className="ib" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid={testId}>
         {trigger ?? <Icon name="dots" />}
       </button>
       {open ? (

@@ -29,7 +29,8 @@ export async function buildApp(opts: AppOptions = {}): Promise<FastifyInstance> 
   const app = Fastify({
     logger: opts.logger ?? (isProd() ? true : { level: "warn" }),
     trustProxy: true,
-    bodyLimit: 2 * 1024 * 1024,
+    // Multipart uploads (media) go up to 50 MB; JSON bodies are bounded by zod maxes.
+    bodyLimit: 60 * 1024 * 1024,
     genReqId: () => Math.random().toString(36).slice(2, 12),
   });
 
