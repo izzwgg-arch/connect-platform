@@ -105,6 +105,14 @@ test("transactions → DID monthly, E911 monthly, the daily CNAM aggregate, sign
   assert.equal(cnam.cost, 4.152);
   assert.equal(cnam.externalId, "tx:cnam_daily:2026-09-17:CNAM Queries");
   assert.equal(cnam.occurredAt.toISOString(), "2026-09-17T00:00:00.000Z");
+  assert.equal(did.description, "Number monthly fee");
+  assert.equal(e911.description, "911 registration monthly fee");
+  const setup = feed.parseVoipmsTransactionRow({ date: "2026-08-19 00:05:18", uniqueid: "6001x1", type: "E911SETUP-8452449666", description: "Frais de r&eacute;cup&eacute;ration e911: SETUP-8452449666", ammount: "-1.50" }, "default")!;
+  assert.equal(setup.kind, "E911_MONTHLY", "the E911SETUP row recurs monthly too");
+  assert.equal(setup.numberE164, "+18452449666");
+  assert.equal(setup.description, "911 registration fee");
+  const paypal = feed.parseVoipmsTransactionRow({ date: "2026-08-19 00:05:18", uniqueid: "6001x2", type: "PAYPAL", description: "Paiement Paypal", ammount: "100.00" }, "default");
+  assert.equal(paypal, null, "an account top-up is nobody's cost");
 });
 
 test("the daily CNAM charge reconciles with the per-call lookups at $0.008", async () => {

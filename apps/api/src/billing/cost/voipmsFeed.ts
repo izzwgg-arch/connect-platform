@@ -143,16 +143,26 @@ export function parseVoipmsTransactionRow(row: any, accountId: string): UsageRec
   if (!occurredAt) return null;
   let kind: UsageKind = "OTHER";
   let numberE164: string | null = null;
+  let label: string | null = null;
   if (/^DID\d{10,11}$/i.test(type)) {
     kind = "DID_MONTHLY";
     numberE164 = toE164(type.slice(3));
-  } else if (/^E911\s*\d{10,11}$/i.test(type)) {
+    label = "Number monthly fee";
+  } else if (/^E911[\s-]*\d{10,11}$/i.test(type) || /^E911SETUP[\s-]*\d{10,11}$/i.test(type)) {
+    // Both "E911 8452449666" and "E911SETUP-8452449666" recur monthly at $1.50
+    // per number (seen twice each per number in a 29-day window, Aug 2026);
+    // raw.type keeps them apart.
     kind = "E911_MONTHLY";
-    numberE164 = toE164(type.replace(/^E911\s*/i, ""));
+    numberE164 = toE164(type.replace(/^E911(SETUP)?[\s-]*/i, ""));
+    label = /SETUP/i.test(type) ? "911 registration fee" : "911 registration monthly fee";
   } else if (/CNAM Queries/i.test(type) || /CNAM Queries/i.test(description)) {
     kind = "CNAM_DAILY";
+    label = "CNAM lookups (account-wide daily charge)";
   } else {
     numberE164 = toE164(description.match(/(\d{10,11})\b/)?.[1] ?? type.match(/(\d{10,11})\b/)?.[1]);
+    // A payment or credit to the account that names no number is not a
+    // customer's cost — PayPal top-ups show up here; leave them out.
+    if (amount > 0 && !numberE164) return null;
   }
   const uniqueid = String(row?.uniqueid ?? "").trim();
   const externalId =
@@ -170,8 +180,8 @@ export function parseVoipmsTransactionRow(row: any, accountId: string): UsageRec
     tenantId: null,
     quantity: 1,
     cost,
-    description: description.replace(/&[a-z]+;/g, "") || type,
-    raw: { type },
+    description: label ?? (description.replace(/&[a-z]+;/g, "") || type),
+    raw: { type, carrierDescription: description.replace(/&[a-z]+;/g, "") },
   };
 }
 
