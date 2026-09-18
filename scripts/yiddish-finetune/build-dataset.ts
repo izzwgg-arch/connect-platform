@@ -643,11 +643,54 @@ async function main(): Promise<void> {
   const db: any = new PrismaClient();
 
   console.log(`[build-dataset] querying YcTranscript engine in (ivrit, human)…`);
-  const transcripts: any[] = await db.ycTranscript.findMany({
-    where: { engine: { in: ["ivrit", "human"] } },
-    include: { item: { include: { source: { include: { rights: true } } } } },
-    ...(cli.limit ? { take: cli.limit } : {}),
-  });
+  // ⛔ The obvious query — findMany with `include: item.source.rights` over every
+  // row — died on a real corpus with "Failed to convert rust String into napi
+  // string". 44,176 rows each carry a `words` JSON of per-word timings AND a
+  // duplicated copy of the item/source/rights tree; the payload is far too big
+  // for one conversion. So: select ONLY the columns this builder reads (never
+  // `words`), page through in chunks, and fetch each item/source exactly ONCE.
+  const TRANSCRIPT_PAGE = 5_000;
+  const transcripts: any[] = [];
+  for (let skip = 0; ; skip += TRANSCRIPT_PAGE) {
+    const take = cli.limit ? Math.min(TRANSCRIPT_PAGE, cli.limit - transcripts.length) : TRANSCRIPT_PAGE;
+    if (take <= 0) break;
+    const page: any[] = await db.ycTranscript.findMany({
+      where: { engine: { in: ["ivrit", "human"] } },
+      select: {
+        id: true,
+        itemId: true,
+        segmentId: true,
+        engine: true,
+        sttProvider: true,
+        text: true,
+        confidence: true,
+        noSpeechProb: true,
+        startMs: true,
+        endMs: true,
+        chunkIndex: true,
+        originRef: true,
+      },
+      orderBy: { id: "asc" },
+      skip,
+      take,
+    });
+    transcripts.push(...page);
+    if (page.length < take) break;
+    if (transcripts.length % 20_000 === 0) console.log(`[build-dataset]   …${transcripts.length} rows`);
+  }
+
+  // One row per item, not per transcript.
+  const transcriptItemIds = [...new Set(transcripts.map((t) => t.itemId))];
+  const itemById = new Map<string, any>();
+  for (let i = 0; i < transcriptItemIds.length; i += 500) {
+    const slice = transcriptItemIds.slice(i, i + 500);
+    const items: any[] = await db.ycSourceItem.findMany({
+      where: { id: { in: slice } },
+      select: { id: true, source: { include: { rights: true } } },
+    });
+    for (const it of items) itemById.set(it.id, it);
+  }
+  for (const t of transcripts) t.item = itemById.get(t.itemId) ?? null;
 
   const itemIds = [...new Set(transcripts.map((t) => t.itemId))];
   const assets: any[] = itemIds.length

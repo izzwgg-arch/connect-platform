@@ -685,6 +685,14 @@ function makeFakeCorpusDb() {
         }
         return { count: before - transcripts.length };
       },
+      // The real client is what importBatch uses to write segments in bulk; a
+      // fake that only knows create() would pass while production dies on the
+      // pool. Model both.
+      createMany: async ({ data }: any) => {
+        const list = Array.isArray(data) ? data : [data];
+        for (const d of list) transcripts.push({ id: `t${nextId++}`, ...d });
+        return { count: list.length };
+      },
       create: async ({ data }: any) => {
         const row = { id: `t${nextId++}`, ...data };
         transcripts.push(row);

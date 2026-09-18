@@ -77,7 +77,18 @@ export const MAX_POLL_HOURS = 13;
 export const kaggleAwareExecFn: ExecFn = (cmd, args, opts) =>
   new Promise((resolve) => {
     const resolvedCmd = cmd === "kaggle" && existsSync(KAGGLE_EXE) ? KAGGLE_EXE : cmd;
-    const env = { ...process.env, PATH: `${KAGGLE_BIN_DIR};${process.env.PATH || ""}` };
+    // ⛔ The Kaggle CLI prints whatever the kernel logged. A Yiddish kernel log is
+    // Hebrew script, and on Windows Python defaults to cp1252, so `kernels output`
+    // died with "'charmap' codec can't encode characters" AFTER it had already
+    // written transcripts.json — the data was fine, the CLI just could not print.
+    // Force UTF-8 so an unattended run never loses a finished batch to a console
+    // encoding error.
+    const env = {
+      ...process.env,
+      PATH: `${KAGGLE_BIN_DIR};${process.env.PATH || ""}`,
+      PYTHONIOENCODING: "utf-8",
+      PYTHONUTF8: "1",
+    };
     execFile(resolvedCmd, args, { cwd: opts?.cwd, env, maxBuffer: 32 * 1024 * 1024, timeout: 30 * 60_000 }, (err: any, stdout, stderr) => {
       let errText = String(stderr || "");
       if (err && !errText && !String(stdout || "")) {

@@ -586,6 +586,10 @@ export interface ImportSummary {
  * stage does. Entries with an error (or no result at all) are left
  * completely untouched and reported as failures.
  */
+/** Segments written per createMany call. Keeps one statement well under any
+ * parameter limit while cutting ~44,000 round trips to a few hundred. */
+export const IMPORT_CHUNK_ROWS = 500;
+
 export async function importBatch(
   manifest: BatchManifestEntry[],
   transcriptsFile: TranscriptsFile,
@@ -616,9 +620,15 @@ export async function importBatch(
     await db.ycTranscript.deleteMany({ where: { itemId: entry.itemId, engine: "ivrit", originRef } }).catch(() => {});
 
     const rows = buildImportRows(entry, result, batch, model, deps.transcriptConfidence);
-    for (const row of rows) {
-      await db.ycTranscript.create({ data: row });
-      segments += 1;
+    // ⛔ One create() per segment exhausted the Prisma pool and died with P2024
+    // (connection_limit 9, timeout 10 s) after 12,056 of 44,176 rows — a batch
+    // is ~44k segments and the DB is at the far end of an SSH tunnel. createMany
+    // sends them in a few round trips instead of tens of thousands. Chunked so a
+    // single statement never gets absurdly large.
+    for (let i = 0; i < rows.length; i += IMPORT_CHUNK_ROWS) {
+      const chunk = rows.slice(i, i + IMPORT_CHUNK_ROWS);
+      await db.ycTranscript.createMany({ data: chunk });
+      segments += chunk.length;
     }
     hoursMs += entry.durationMs;
 
